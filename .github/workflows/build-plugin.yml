@@ -17,6 +17,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Select Xcode 15.4
+        run: sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
+
       - name: Clone JUCE
         run: git clone --depth=1 --branch=8.0.12 https://github.com/juce-framework/JUCE.git ../JUCE
 
