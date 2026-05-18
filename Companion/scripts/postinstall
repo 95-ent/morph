@@ -1,0 +1,72 @@
+#!/bin/bash
+# postinstall — runs as root after pkg payload is placed.
+# macOS Installer may auto-relocate WaterMorphHelper.app to an existing
+# install path (bundle-relocation). We handle both cases:
+#   • Already relocated → app is at AU_HELPERS, just fix ownership.
+#   • Fresh install     → app is at /Library/Application Support/Water/, copy it.
+
+set -e
+
+LABEL="ai.95ent.watermorph.helper"
+APP_STAGED="/Library/Application Support/Water/WaterMorphHelper.app"
+
+CURRENT_USER=$(stat -f "%Su" /dev/console)
+USER_HOME=$(dscl . -read /Users/"$CURRENT_USER" NFSHomeDirectory 2>/dev/null \
+            | awk '{print $2}')
+[ -z "$USER_HOME" ] && USER_HOME="/Users/$CURRENT_USER"
+USER_UID=$(id -u "$CURRENT_USER")
+
+AU_HELPERS="$USER_HOME/Library/Audio/Plug-Ins/Components/Morph.component/Contents/Helpers"
+LAUNCH_AGENTS="$USER_HOME/Library/LaunchAgents"
+HELPER_EXE="$AU_HELPERS/WaterMorphHelper.app/Contents/MacOS/WaterMorphHelper"
+
+# ── 1. Place the helper in the AU component ──────────────────────────────────
+if [ -d "$AU_HELPERS/WaterMorphHelper.app" ]; then
+    # Bundle was already relocated by the Installer — just fix ownership.
+    chown -R "$CURRENT_USER" "$AU_HELPERS/WaterMorphHelper.app"
+elif [ -d "$APP_STAGED" ]; then
+    # Fresh install — copy from the staged location.
+    mkdir -p "$AU_HELPERS"
+    rm -rf "$AU_HELPERS/WaterMorphHelper.app"
+    cp -R "$APP_STAGED" "$AU_HELPERS/"
+    chown -R "$CURRENT_USER" "$AU_HELPERS/WaterMorphHelper.app"
+else
+    echo "postinstall: WaterMorphHelper.app not found — aborting." >&2
+    exit 1
+fi
+
+# ── 2. Write the LaunchAgent plist ──────────────────────────────────────────
+mkdir -p "$LAUNCH_AGENTS"
+launchctl asuser "$USER_UID" launchctl unload \
+    "$LAUNCH_AGENTS/$LABEL.plist" 2>/dev/null || true
+
+cat > "$LAUNCH_AGENTS/$LABEL.plist" << PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>$LABEL</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>$HELPER_EXE</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/tmp/water-morph-helper.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/water-morph-helper.log</string>
+</dict>
+</plist>
+PLIST
+
+chown "$CURRENT_USER" "$LAUNCH_AGENTS/$LABEL.plist"
+
+# ── 3. Start immediately — no reboot needed ──────────────────────────────────
+launchctl asuser "$USER_UID" launchctl load -w "$LAUNCH_AGENTS/$LABEL.plist"
+
+exit 0

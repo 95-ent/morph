@@ -1,0 +1,106 @@
+name: Build Morph Plugin
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'Source/**'
+      - 'Libs/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/build-plugin.yml'
+  workflow_dispatch:
+
+jobs:
+  # ── Mac (AU + VST3, Universal) ─────────────────────────────────────────────
+  build-mac:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone JUCE
+        run: git clone --depth=1 --branch=7.0.12 https://github.com/juce-framework/JUCE.git ../JUCE
+
+      - name: Configure (CMake)
+        run: |
+          cmake -B build-mac \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DJUCE_PATH="$(pwd)/../JUCE" \
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+
+      - name: Build
+        run: cmake --build build-mac --config Release --parallel
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p dist/mac
+          # VST3
+          find build-mac -name "*.vst3" -exec cp -R {} dist/mac/ \;
+          # AU component
+          find build-mac -name "*.component" -exec cp -R {} dist/mac/ \;
+
+      - name: Upload Mac artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Morph-Mac
+          path: dist/mac/
+          retention-days: 14
+
+  # ── Windows (VST3, x64) ────────────────────────────────────────────────────
+  build-windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone JUCE
+        run: git clone --depth=1 --branch=7.0.12 https://github.com/juce-framework/JUCE.git ../JUCE
+
+      - name: Configure (CMake)
+        run: |
+          cmake -B build-win `
+            -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_BUILD_TYPE=Release `
+            "-DJUCE_PATH=${{ github.workspace }}\..\JUCE"
+
+      - name: Build
+        run: cmake --build build-win --config Release --parallel
+
+      - name: Collect VST3
+        run: |
+          New-Item -ItemType Directory -Force -Path dist\win
+          Get-ChildItem -Path build-win -Filter "*.vst3" -Recurse | Copy-Item -Destination dist\win -Recurse
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Morph-Windows
+          path: dist\win\
+          retention-days: 14
+
+  # ── Windows companion (Electron .exe installer) ───────────────────────────
+  build-companion-win:
+    runs-on: windows-2022
+    defaults:
+      run:
+        working-directory: CompanionWin
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install deps
+        run: npm install
+
+      - name: Build installer
+        run: npm run dist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: WaterMorphHelper-Win-Setup
+          path: CompanionWin/dist/*.exe
+          retention-days: 14

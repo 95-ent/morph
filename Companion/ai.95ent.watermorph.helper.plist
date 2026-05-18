@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>ai.95ent.watermorph.helper</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>HELPER_PATH_PLACEHOLDER</string>
+    </array>
+
+    <!-- Start immediately and keep alive if it exits -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/water-morph-helper.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/water-morph-helper.log</string>
+</dict>
+</plist>

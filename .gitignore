@@ -1,0 +1,29 @@
+# Mac build artifacts
+Builds/MacOSX/build/
+*.pkg
+*.dmg
+*.app
+
+# VS build output (keep .sln / .vcxproj, ignore compiled output)
+Builds/VisualStudio2022/x64/
+Builds/VisualStudio2022/Win32/
+Builds/VisualStudio2022/*.user
+
+# Plugin binaries
+*.vst3
+*.component
+*.so
+*.dll
+
+# Electron companion
+CompanionWin/node_modules/
+CompanionWin/dist/
+CompanionWin/out/
+
+# System
+.DS_Store
+Thumbs.db
+
+# Docs / planning (internal only)
+*.md
+!README.md

@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<JUCERPROJECT id="MorphPlugin" name="Morph" projectType="audioplug" version="1.0.0"
+              bundleIdentifier="ai.95ent.morph" companyName="Water" companyWebsite="https://water.95ent.ai"
+              manufacturerCode="WATR" pluginCode="Mrph" pluginName="Morph"
+              pluginDescription="Water catalog browser and real-time morphing plugin"
+              pluginFormats="buildAU,buildVST3" pluginAUExportPrefix="MorphAU"
+              pluginIsSynth="0" pluginWantsMidiInput="0" pluginProducesMidiOut="0"
+              pluginIsMidiEffect="0" pluginEditorRequiresKeys="1" pluginAUMainType="'aufx'"
+              pluginVST3Category="Fx" maxBinarySize="10240" jucePath="/Users/Sebastien Graux/GRAUX Dropbox/S&#233;bastien Graux/GRAUX_SYSTEM/02_Tech/JUCE"
+              defines="JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0"
+              headerPath="" libraryPath="" pluginCharacteristicsValue="pluginEditorRequiresKeys"
+              jucerFormatVersion="1">
+  <MAINGROUP id="MorphPlugin" name="Morph">
+    <GROUP id="Source" name="Source">
+      <FILE id="PluginProcessorH" name="PluginProcessor.h" compile="0" resource="0"
+            file="Source/PluginProcessor.h"/>
+      <FILE id="PluginProcessorCpp" name="PluginProcessor.cpp" compile="1"
+            resource="0" file="Source/PluginProcessor.cpp"/>
+      <FILE id="PluginEditorH" name="PluginEditor.h" compile="0" resource="0"
+            file="Source/PluginEditor.h"/>
+      <FILE id="PluginEditorCpp" name="PluginEditor.cpp" compile="1" resource="0"
+            file="Source/PluginEditor.cpp"/>
+      <FILE id="LoginComponentH" name="LoginComponent.h" compile="0" resource="0"
+            file="Source/LoginComponent.h"/>
+      <FILE id="LoginComponentCpp" name="LoginComponent.cpp" compile="1"
+            resource="0" file="Source/LoginComponent.cpp"/>
+      <FILE id="LibraryComponentH" name="LibraryComponent.h" compile="0"
+            resource="0" file="Source/LibraryComponent.h"/>
+      <FILE id="LibraryComponentCpp" name="LibraryComponent.cpp" compile="1"
+            resource="0" file="Source/LibraryComponent.cpp"/>
+      <FILE id="DropZoneComponentH" name="DropZoneComponent.h" compile="0"
+            resource="0" file="Source/DropZoneComponent.h"/>
+      <FILE id="DropZoneComponentCpp" name="DropZoneComponent.cpp" compile="1"
+            resource="0" file="Source/DropZoneComponent.cpp"/>
+      <FILE id="WaterAPIH" name="WaterAPI.h" compile="0" resource="0" file="Source/WaterAPI.h"/>
+      <FILE id="WaterAPICpp" name="WaterAPI.cpp" compile="1" resource="0"
+            file="Source/WaterAPI.cpp"/>
+      <FILE id="MorphEngineH" name="MorphEngine.h" compile="0" resource="0"
+            file="Source/MorphEngine.h"/>
+      <FILE id="MorphEngineCpp" name="MorphEngine.cpp" compile="1" resource="0"
+            file="Source/MorphEngine.cpp"/>
+      <FILE id="LocalDetectorH" name="LocalDetector.h" compile="0" resource="0"
+            file="Source/LocalDetector.h"/>
+      <FILE id="LocalDetectorCpp" name="LocalDetector.cpp" compile="1" resource="0"
+            file="Source/LocalDetector.cpp"/>
+      <FILE id="CompanionLinkH" name="CompanionLink.h" compile="0" resource="0"
+            file="Source/CompanionLink.h"/>
+      <FILE id="CompanionLinkCpp" name="CompanionLink.cpp" compile="1" resource="0"
+            file="Source/CompanionLink.cpp"/>
+    </GROUP>
+  </MAINGROUP>
+  <MODULES>
+    <MODULE id="juce_audio_basics" showAllCode="1" useLocalCopy="0" useGlobalPath="0"/>
+    <MODULE id="juce_audio_devices" showAllCode="1" useLocalCopy="0" useGlobalPath="0"/>
+    <MODULE id="juce_audio_formats" showAllCode="1" useLocalCopy="0" useGlobalPath="0"/>
+    <MODULE id="juce_audio_plugin_client" showAllCode="1" useLocalCopy="0"
+            useGlobalPath="0"/>
+    <MODULE id="juce_audio_processors" showAllCode="1" useLocalCopy="0" useGlobalPath="0"/>
+    <MODULE id="juce_audio_processors_headless" showAllCode="1" useLocalCopy="0"
+            useGlobalPath="0"/>
+    <MODULE id="juce_audio_utils" showAllCode="1" useLocalCopy="0" useGlobalPath="0"/>
+    <MODULE id="juce_core" showAllCode="1" useLocalCopy="0" useGlobalPath="0"/>
+    <MODULE id="juce_data_structures" showAllCode="1" useLocalCopy="0" useGlobalPath="0"/>
+    <MODULE id="juce_dsp" showAllCode="1" useLocalCopy="0" useGlobalPath="0"/>
+    <MODULE id="juce_events" showAllCode="1" useLocalCopy="0" useGlobalPath="0"/>
+    <MODULE id="juce_graphics" showAllCode="1" useLocalCopy="0" useGlobalPath="0"/>
+    <MODULE id="juce_gui_basics" showAllCode="1" useLocalCopy="0" useGlobalPath="0"/>
+    <MODULE id="juce_gui_extra" showAllCode="1" useLocalCopy="0" useGlobalPath="0"/>
+  </MODULES>
+  <EXPORTFORMATS>
+    <XCODE_MAC targetFolder="Builds/MacOSX" extraLinkerFlags="" extraCompilerFlags=""
+               deploymentTarget="11.0" buildActiveArch="0" enablePluginBinaryCopyStep="1"
+               vstBinaryLocation="$(HOME)/Library/Audio/Plug-Ins/VST3/" auBinaryLocation="$(HOME)/Library/Audio/Plug-Ins/Components/">
+      <CONFIGURATIONS>
+        <CONFIGURATION name="Debug" isDebug="1" optimisation="1" targetName="Morph"
+                       headerPath="../Libs" defines="DEBUG=1 _DEBUG=1" osxArchitectures="ARM64 x86_64"/>
+        <CONFIGURATION name="Release" isDebug="0" optimisation="3" targetName="Morph"
+                       headerPath="../Libs" defines="NDEBUG=1" osxArchitectures="ARM64 x86_64"/>
+      </CONFIGURATIONS>
+      <MODULEPATHS>
+        <MODULEPATH id="juce_audio_processors_headless" path="../../../../S&#233;bastien Graux/GRAUX_SYSTEM/02_Tech/JUCE/modules"/>
+      </MODULEPATHS>
+    </XCODE_MAC>
+    <VS2022 targetFolder="Builds/VisualStudio2022" extraLinkerFlags="" extraCompilerFlags=""
+             platformToolset="v143" windowsTargetPlatformVersion="10.0">
+      <CONFIGURATIONS>
+        <CONFIGURATION name="Debug" isDebug="1" optimisation="1" targetName="Morph"
+                       headerPath="../Libs" defines="DEBUG=1 _DEBUG=1"/>
+        <CONFIGURATION name="Release" isDebug="0" optimisation="3" targetName="Morph"
+                       headerPath="../Libs" defines="NDEBUG=1"/>
+      </CONFIGURATIONS>
+    </VS2022>
+  </EXPORTFORMATS>
+  <JUCEOPTIONS/>
+</JUCERPROJECT>
