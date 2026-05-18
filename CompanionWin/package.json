@@ -17,13 +17,16 @@
     },
     "nsis": {
       "oneClick": true,
-      "perMachine": false,
+      "perMachine": true,
       "allowToChangeInstallationDirectory": false,
       "runAfterFinish": true,
-      "createStartMenuShortcut": true
+      "createStartMenuShortcut": true,
+      "include": "installer.nsh"
     },
     "files": ["main.js", "preload.js"],
-    "extraResources": []
+    "extraResources": [
+      { "from": "vst3/Morph.vst3", "to": "Morph.vst3", "filter": ["**/*"] }
+    ]
   },
   "dependencies": {},
   "devDependencies": {

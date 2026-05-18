@@ -8,6 +8,7 @@ on:
       - 'Libs/**'
       - 'CMakeLists.txt'
       - '.github/workflows/build-plugin.yml'
+      - 'CompanionWin/**'
   workflow_dispatch:
 
 jobs:
@@ -34,19 +35,30 @@ jobs:
       - name: Build
         run: cmake --build build-mac --config Release --parallel
 
-      - name: Collect artifacts
+      - name: Collect plugin files
         run: |
           mkdir -p dist/mac
-          # VST3
           find build-mac -name "*.vst3" -exec cp -R {} dist/mac/ \;
-          # AU component
           find build-mac -name "*.component" -exec cp -R {} dist/mac/ \;
 
-      - name: Upload Mac artifacts
+      - name: Build .pkg installer
+        run: |
+          mkdir -p pkg-root/Library/Audio/Plug-Ins/VST3
+          mkdir -p pkg-root/Library/Audio/Plug-Ins/Components
+          cp -R dist/mac/Morph.vst3 pkg-root/Library/Audio/Plug-Ins/VST3/
+          cp -R dist/mac/Morph.component pkg-root/Library/Audio/Plug-Ins/Components/
+          pkgbuild \
+            --root pkg-root \
+            --identifier ai.95ent.morph \
+            --version 1.0.0 \
+            --install-location / \
+            Morph-Mac-Installer.pkg
+
+      - name: Upload Mac installer
         uses: actions/upload-artifact@v4
         with:
-          name: Morph-Mac
-          path: dist/mac/
+          name: Morph-Mac-Installer
+          path: Morph-Mac-Installer.pkg
           retention-days: 14
 
   # ── Windows (VST3, x64) ────────────────────────────────────────────────────
@@ -78,16 +90,17 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist\win | Out-Null
           Copy-Item -Path $vst3.FullName -Destination dist\win -Recurse
 
-      - name: Upload Windows artifacts
+      - name: Upload Windows VST3 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Morph-Windows
+          name: Morph-Windows-VST3
           path: dist\win\
-          retention-days: 14
+          retention-days: 1
 
-  # ── Windows companion (Electron .exe installer) ───────────────────────────
-  build-companion-win:
+  # ── Windows installer (VST3 + Electron companion, bundled) ────────────────
+  build-installer-win:
     runs-on: windows-2022
+    needs: build-windows
     defaults:
       run:
         working-directory: CompanionWin
@@ -98,6 +111,12 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Download VST3 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: Morph-Windows-VST3
+          path: CompanionWin/vst3
+
       - name: Install deps
         run: npm install
 
@@ -106,7 +125,7 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
-      - name: Upload installer
+      - name: Upload Windows installer
         uses: actions/upload-artifact@v4
         with:
           name: WaterMorphHelper-Win-Setup
