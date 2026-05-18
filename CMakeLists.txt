@@ -7,6 +7,11 @@ if(NOT DEFINED JUCE_PATH)
 endif()
 add_subdirectory("${JUCE_PATH}" "${CMAKE_BINARY_DIR}/JUCE")
 
+# Static MSVC runtime so juce_vst3_helper.exe runs without redistributable DLLs
+if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
 juce_add_plugin(Morph
     COMPANY_NAME                "Water"
     BUNDLE_ID                   "ai.95ent.morph"
