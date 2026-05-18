@@ -13,7 +13,8 @@
     "productName": "WaterMorphHelper",
     "publish": null,
     "win": {
-      "target": [{ "target": "nsis", "arch": ["x64"] }]
+      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "artifactName": "Water_Morph_1.0.0_Windows.exe"
     },
     "nsis": {
       "oneClick": true,
