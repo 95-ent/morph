@@ -24,6 +24,8 @@ juce_add_plugin(Morph
     AU_MAIN_TYPE                "aufx"
 )
 
+juce_generate_juce_header(Morph)
+
 target_sources(Morph PRIVATE
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp
