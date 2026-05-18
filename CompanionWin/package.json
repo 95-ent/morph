@@ -10,7 +10,7 @@
   },
   "build": {
     "appId": "ai.95ent.watermorph.helper",
-    "productName": "WaterMorphHelper",
+    "productName": "Water Morph",
     "publish": null,
     "win": {
       "target": [{ "target": "nsis", "arch": ["x64"] }],
