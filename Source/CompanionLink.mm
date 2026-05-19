@@ -1,11 +1,12 @@
 #import <Cocoa/Cocoa.h>
 #include "CompanionLink.h"
 #include <sys/socket.h>
-#include <sys/un.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <unistd.h>
 
-static constexpr const char* kSocketPath = "/tmp/water-morph.sock";
-static constexpr int         kTimeoutMs  = 3000;
+static constexpr uint16_t kTCPPort  = 59812;
+static constexpr int      kTimeoutMs = 3000;
 
 //==============================================================================
 CompanionLink& CompanionLink::get()
@@ -44,13 +45,13 @@ bool CompanionLink::tryConnect()
 {
     disconnect();
 
-    int fd = socket (AF_UNIX, SOCK_STREAM, 0);
+    int fd = socket (AF_INET, SOCK_STREAM, 0);
     if (fd < 0) return false;
 
-    // Non-blocking connect with a short timeout
-    struct sockaddr_un addr = {};
-    addr.sun_family = AF_UNIX;
-    strlcpy (addr.sun_path, kSocketPath, sizeof (addr.sun_path));
+    struct sockaddr_in addr = {};
+    addr.sin_family      = AF_INET;
+    addr.sin_port        = htons (kTCPPort);
+    addr.sin_addr.s_addr = htonl (INADDR_LOOPBACK);
 
     if (::connect (fd, (struct sockaddr*) &addr, sizeof (addr)) < 0)
     {

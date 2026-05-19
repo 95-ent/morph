@@ -1688,10 +1688,21 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
 
     override func loadView() {
         let config = WKWebViewConfiguration()
-        config.userContentController.add(WKMessageProxy(self), name: "morphHover")
-        config.userContentController.add(WKMessageProxy(self), name: "morphSelect")
-        config.userContentController.add(WKMessageProxy(self), name: "morphCopy")
-        config.userContentController.add(WKMessageProxy(self), name: "morphPlayerState")
+        // Use the non-deprecated addScriptMessageHandler(_:contentWorld:name:) on macOS 11+.
+        // The legacy add(_:name:) overload was deprecated in macOS 14 (Sonoma) and triggers
+        // an internal WebKit precondition (EXC_BREAKPOINT) on macOS 14+ at call time.
+        let proxy = WKMessageProxy(self)
+        if #available(macOS 11.0, *) {
+            config.userContentController.add(proxy, contentWorld: .page, name: "morphHover")
+            config.userContentController.add(proxy, contentWorld: .page, name: "morphSelect")
+            config.userContentController.add(proxy, contentWorld: .page, name: "morphCopy")
+            config.userContentController.add(proxy, contentWorld: .page, name: "morphPlayerState")
+        } else {
+            config.userContentController.add(proxy, name: "morphHover")
+            config.userContentController.add(proxy, name: "morphSelect")
+            config.userContentController.add(proxy, name: "morphCopy")
+            config.userContentController.add(proxy, name: "morphPlayerState")
+        }
         // Auth UserScript is injected dynamically in loadWebUI() so it always
         // uses the latest (possibly refreshed) tokens, never a stale snapshot.
 
@@ -2032,6 +2043,18 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
 
     deinit {
         webView?.removeObserver(self, forKeyPath: #keyPath(WKWebView.url))
+        // Remove message handlers to break the WebKit internal retain and avoid
+        // the "handler removed while still registered" assertion on dealloc.
+        let uc = webView?.configuration.userContentController
+        if #available(macOS 11.0, *) {
+            for name in ["morphHover", "morphSelect", "morphCopy", "morphPlayerState"] {
+                uc?.removeScriptMessageHandler(forName: name, contentWorld: .page)
+            }
+        } else {
+            for name in ["morphHover", "morphSelect", "morphCopy", "morphPlayerState"] {
+                uc?.removeScriptMessageHandler(forName: name)
+            }
+        }
     }
 
     override func observeValue(forKeyPath keyPath: String?, of object: Any?,

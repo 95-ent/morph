@@ -26,7 +26,7 @@ juce_add_plugin(Morph
     EDITOR_WANTS_KEYBOARD_FOCUS TRUE
     DESCRIPTION                 "Water catalog browser and real-time morphing plugin"
     VST3_CATEGORIES             "Fx"
-    AU_MAIN_TYPE                "aufx"
+    AU_MAIN_TYPE                kAudioUnitType_Effect
 )
 
 juce_generate_juce_header(Morph)

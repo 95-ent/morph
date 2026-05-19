@@ -9,7 +9,11 @@ on:
       - 'CMakeLists.txt'
       - '.github/workflows/build-plugin.yml'
       - 'CompanionWin/**'
+      - 'Companion/**'
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   # ── Mac (AU + VST3, Universal) ─────────────────────────────────────────────
@@ -57,6 +61,15 @@ jobs:
           name: Water_Morph_1.0.0_macOS
           path: Water_Morph_1.0.0_macOS.pkg
           retention-days: 14
+
+      - name: Publish Mac to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: "Water Morph — Latest Build"
+          prerelease: true
+          make_latest: true
+          files: Water_Morph_1.0.0_macOS.pkg
 
   # ── Windows (VST3, x64) ────────────────────────────────────────────────────
   build-windows:
@@ -128,3 +141,12 @@ jobs:
           name: Water_Morph_1.0.0_Windows
           path: CompanionWin/dist/*.exe
           retention-days: 14
+
+      - name: Publish Windows to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: "Water Morph — Latest Build"
+          prerelease: true
+          make_latest: true
+          files: CompanionWin/dist/*.exe
