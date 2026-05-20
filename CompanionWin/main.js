@@ -40,13 +40,19 @@ function createWindow() {
       preload:            path.join(__dirname, 'preload.js'),
       contextIsolation:   true,
       nodeIntegration:    false,
-      devTools:           false,
+      devTools:           true,
     }
   })
 
   win.loadURL(`${kBaseURL}/library`, {
     userAgent: kUA,
     extraHeaders: 'X-Water-Companion: windows\n'
+  })
+
+  win.webContents.on('before-input-event', (_event, input) => {
+    if (input.type === 'keyDown' && input.key === 'I' && input.control && input.shift) {
+      win?.webContents.toggleDevTools()
+    }
   })
 
   win.webContents.on('did-fail-load', () => {
