@@ -17,6 +17,9 @@ const kUA      = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (
 const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) { app.quit(); process.exit(0) }
 
+// Register watermorph:// protocol handler (runtime fallback — installer also handles this)
+app.setAsDefaultProtocolClient('watermorph')
+
 // ── State ────────────────────────────────────────────────────────────────────
 
 let win   = null
@@ -213,9 +216,21 @@ app.whenReady().then(() => {
   registerAutostart()
 })
 
-app.on('second-instance', () => {
+app.on('second-instance', (_event, argv) => {
+  // Handle watermorph:// deep-link from second instance
+  const url = argv.find((a) => a.startsWith('watermorph://'))
+  if (url) handleProtocolUrl(url)
   if (win) { win.show(); win.focus() }
 })
+
+app.on('open-url', (_event, url) => {
+  handleProtocolUrl(url)
+})
+
+function handleProtocolUrl(url) {
+  if (!url.startsWith('watermorph://')) return
+  if (win) { win.show(); win.focus() }
+}
 
 app.on('window-all-closed', (e) => {
   e.preventDefault()  // Keep running in tray

@@ -12,6 +12,9 @@
     "appId": "ai.95ent.watermorph.helper",
     "productName": "Water Morph",
     "publish": null,
+    "protocols": [
+      { "name": "Water Morph", "schemes": ["watermorph"] }
+    ],
     "win": {
       "target": [{ "target": "nsis", "arch": ["x64"] }],
       "artifactName": "Water_Morph_1.0.0_Windows.exe"
