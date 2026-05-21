@@ -29,13 +29,22 @@ let dawState = { bpm: 0, key: '', isConnected: false }
 // ── Window ───────────────────────────────────────────────────────────────────
 
 function createWindow() {
+  // titleBarStyle 'hidden' doesn't work correctly on Windows (content area
+  // doesn't fill under the title bar). Use titleBarOverlay for Windows
+  // custom chrome, which keeps a native draggable area but lets us color it.
+  const isMac = process.platform === 'darwin'
   win = new BrowserWindow({
     width:           420,
     height:          700,
     minWidth:        340,
     minHeight:       480,
     frame:           true,
-    titleBarStyle:   'hidden',
+    titleBarStyle:   isMac ? 'hidden' : 'hiddenInset',
+    titleBarOverlay: isMac ? false : {
+      color:       '#0a0a0a',
+      symbolColor: '#8B5CF6',   // mauve — Water brand
+      height:      28,
+    },
     backgroundColor: '#0a0a0a',
     title:           'Water Morph',
     skipTaskbar:     false,
@@ -147,6 +156,11 @@ function handleLine(conn, line) {
   } else if (line.startsWith('DRAG ')) {
     // On Windows with VST3, drag is handled natively in the plugin.
     // The companion still sends OK to keep the plugin happy.
+    conn.write('OK\n')
+
+  } else if (line === 'SHOW_WINDOW') {
+    // Plugin clicked "Open Water" — bring companion window to front
+    if (win) { win.show(); win.focus() }
     conn.write('OK\n')
 
   } else if (line.startsWith('SYNC ')) {

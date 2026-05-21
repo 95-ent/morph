@@ -254,7 +254,9 @@ void MorphAudioProcessorEditor::mouseUp (const juce::MouseEvent& e)
 
     if (helpRect_.contains (pt))
     {
-        juce::URL ("https://water.95ent.ai").launchInDefaultBrowser();
+        // Show the companion window (Electron app). Falls back to watermorph://
+        // protocol if companion is not connected, which launches it if installed.
+        CompanionLink::get().requestShowWindow();
         return;
     }
 

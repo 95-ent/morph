@@ -49,6 +49,12 @@ public:
     void sendTransport (bool playing, double timeSecs, double ppq = 0.0);
 
     //==========================================================================
+    // Ask the companion to bring its window to front.
+    // Falls back gracefully if companion is not running.
+    //==========================================================================
+    void requestShowWindow();
+
+    //==========================================================================
     bool isConnected() const noexcept;
 
 private:
@@ -56,6 +62,12 @@ private:
     ~CompanionLink();
 
     std::unique_ptr<juce::StreamingSocket> socket;
+
+    // Throttle reconnect attempts — tryConnect() blocks for kConnectTimeoutMs,
+    // so we cap retries to once every kReconnectThrottleMs to avoid UI freeze.
+    int64_t lastConnectAttemptMs_ { 0 };
+    static constexpr int kConnectTimeoutMs    =  200;   // was 3000 — prevents UI freeze
+    static constexpr int kReconnectThrottleMs = 5000;   // retry at most every 5 s
 
     bool tryConnect();
     void disconnect();

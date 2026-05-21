@@ -1,7 +1,6 @@
 #include "CompanionLink.h"
 
-static constexpr int kPort      = 59812;
-static constexpr int kTimeoutMs = 3000;
+static constexpr int kPort = 59812;
 
 //==============================================================================
 CompanionLink& CompanionLink::get()
@@ -18,17 +17,24 @@ CompanionLink::~CompanionLink()
 //==============================================================================
 bool CompanionLink::tryConnect()
 {
+    // Throttle reconnect attempts to prevent blocking the message thread.
+    // kConnectTimeoutMs is only 200ms but we still cap to once every 5s.
+    const int64_t now = juce::Time::currentTimeMillis();
+    if (now - lastConnectAttemptMs_ < kReconnectThrottleMs)
+        return false;
+    lastConnectAttemptMs_ = now;
+
     disconnect();
     socket = std::make_unique<juce::StreamingSocket>();
 
-    if (! socket->connect ("127.0.0.1", kPort, kTimeoutMs))
+    if (! socket->connect ("127.0.0.1", kPort, kConnectTimeoutMs))
     {
         socket.reset();
         return false;
     }
 
     // Wait for READY\n handshake
-    if (socket->waitUntilReady (true, kTimeoutMs) != 1)
+    if (socket->waitUntilReady (true, kConnectTimeoutMs) != 1)
     {
         socket.reset();
         return false;
@@ -42,6 +48,8 @@ bool CompanionLink::tryConnect()
         return false;
     }
 
+    // Reset throttle on success so a reconnect after disconnect is instant
+    lastConnectAttemptMs_ = 0;
     return true;
 }
 
@@ -111,6 +119,23 @@ void CompanionLink::sendTransport (bool playing, double timeSecs, double ppq)
                            + " " + juce::String (timeSecs, 3)
                            + " " + juce::String (ppq, 4) + "\n";
     if (socket->write (msg.toRawUTF8(), (int) msg.getNumBytesAsUTF8()) <= 0)
+        disconnect();
+}
+
+//==============================================================================
+void CompanionLink::requestShowWindow()
+{
+    if (! isConnected()) tryConnect();
+    if (! isConnected())
+    {
+        // Companion not running — launch it via registered watermorph:// protocol.
+        // The companion registered itself as the handler at install time.
+        juce::URL ("watermorph://show").launchInDefaultBrowser();
+        return;
+    }
+
+    const juce::String cmd = "SHOW_WINDOW\n";
+    if (socket->write (cmd.toRawUTF8(), (int) cmd.getNumBytesAsUTF8()) <= 0)
         disconnect();
 }
 
