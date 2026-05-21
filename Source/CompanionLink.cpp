@@ -86,7 +86,7 @@ bool CompanionLink::requestDrag (const juce::String& filePath)
         return false;
     }
 
-    if (socket->waitUntilReady (true, kTimeoutMs) != 1)
+    if (socket->waitUntilReady (true, kConnectTimeoutMs) != 1)
         return false;
 
     char ack[16] = {};
