@@ -62,7 +62,7 @@ function createWindow() {
   // and the web app renders the full browser UI instead of the companion UI.
   win.webContents.session.setUserAgent(kUA)
 
-  win.loadURL(`${kBaseURL}/library`, {
+  win.loadURL(`${kBaseURL}/library?companion=windows`, {
     userAgent: kUA,
     extraHeaders: 'X-Water-Companion: windows\n'
   })
@@ -75,7 +75,7 @@ function createWindow() {
 
   win.webContents.on('did-fail-load', () => {
     // Retry after 3s on network failure
-    setTimeout(() => win?.loadURL(`${kBaseURL}/library`, { userAgent: kUA }), 3000)
+    setTimeout(() => win?.loadURL(`${kBaseURL}/library?companion=windows`, { userAgent: kUA }), 3000)
   })
 
   win.on('close', (e) => {
