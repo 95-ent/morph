@@ -1,6 +1,6 @@
 {
   "name": "water-morph-helper",
-  "version": "1.0.0",
+  "version": "1.0.3",
   "description": "Water Morph companion — Windows",
   "main": "main.js",
   "scripts": {
@@ -11,13 +11,42 @@
   "build": {
     "appId": "ai.95ent.watermorph.helper",
     "productName": "Water Morph",
-    "publish": null,
+    "publish": {
+      "provider": "github",
+      "owner": "95-ent",
+      "repo": "morph",
+      "releaseType": "prerelease"
+    },
     "protocols": [
-      { "name": "Water Morph", "schemes": ["watermorph"] }
+      {
+        "name": "Water Morph",
+        "schemes": [
+          "watermorph"
+        ]
+      }
     ],
     "win": {
-      "target": [{ "target": "nsis", "arch": ["x64"] }],
-      "artifactName": "Water_Morph_1.0.0_Windows.exe"
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Water_Morph_1.0.3_Windows.exe"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Water_Morph_1.0.3_macOS.dmg"
     },
     "nsis": {
       "oneClick": true,
@@ -27,12 +56,23 @@
       "createStartMenuShortcut": true,
       "include": "installer.nsh"
     },
-    "files": ["main.js", "preload.js"],
+    "files": [
+      "main.js",
+      "preload.js"
+    ],
     "extraResources": [
-      { "from": "vst3/Morph.vst3", "to": "Morph.vst3", "filter": ["**/*"] }
+      {
+        "from": "vst3/Morph.vst3",
+        "to": "Morph.vst3",
+        "filter": [
+          "**/*"
+        ]
+      }
     ]
   },
-  "dependencies": {},
+  "dependencies": {
+    "electron-updater": "^6.8.3"
+  },
   "devDependencies": {
     "electron": "^30.0.0",
     "electron-builder": "^24.0.0"

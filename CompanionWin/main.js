@@ -1,6 +1,7 @@
 'use strict'
 
-const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, shell } = require('electron')
+const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, shell, dialog } = require('electron')
+const { autoUpdater } = require('electron-updater')
 const net  = require('net')
 const path = require('path')
 const fs   = require('fs')
@@ -55,6 +56,11 @@ function createWindow() {
       devTools:           true,
     }
   })
+
+  // Set UA at session level so navigator.userAgent propagates to JS in all pages,
+  // not just the initial HTTP request. Without this, isCompanion detection fails
+  // and the web app renders the full browser UI instead of the companion UI.
+  win.webContents.session.setUserAgent(kUA)
 
   win.loadURL(`${kBaseURL}/library`, {
     userAgent: kUA,
@@ -118,6 +124,30 @@ function registerAutostart() {
   })
 }
 
+// ── Plugin status banner ──────────────────────────────────────────────────────
+
+function injectPluginStatus(connected, bpm, key) {
+  if (!win?.webContents) return
+  const label = connected
+    ? `● Plugin connected${bpm > 0 ? '  ·  ' + Math.round(bpm) + ' BPM' : ''}${key ? '  ·  ' + key : ''}`
+    : '○ Plugin not connected'
+  const color  = connected ? '#5ECFDB' : 'rgba(255,255,255,0.25)'
+  const js = `
+    (function() {
+      var el = document.getElementById('__wm_plugin_status');
+      if (!el) {
+        el = document.createElement('div');
+        el.id = '__wm_plugin_status';
+        el.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;font-size:10px;font-family:system-ui,sans-serif;padding:3px 12px;text-align:center;pointer-events:none;transition:color .3s;border-bottom:1px solid rgba(26,144,160,0.2);background:rgba(5,10,11,0.85);backdrop-filter:blur(8px);';
+        document.body.appendChild(el);
+      }
+      el.style.color = '${color}';
+      el.textContent = '${label}';
+    })()
+  `
+  win.webContents.executeJavaScript(js).catch(() => {})
+}
+
 // ── TCP server ────────────────────────────────────────────────────────────────
 
 function startTCPServer() {
@@ -172,8 +202,10 @@ function handleLine(conn, line) {
     dawState._disconnectTimer = setTimeout(() => {
       dawState.isConnected = false
       updateTrayMenu()
+      injectPluginStatus(false, 0, '')
     }, 5000)
     updateTrayMenu()
+    injectPluginStatus(true, bpm, key)
 
   } else if (line.startsWith('TRANSPORT ')) {
     const parts   = line.slice(10).split(' ')
@@ -220,6 +252,56 @@ ipcMain.on('morphPlayerState', (_event, state) => {
 
 ipcMain.on('morphHover',  (_event, _id)  => { /* no-op on Windows */ })
 ipcMain.on('morphSelect', (_event, _ids) => { /* no-op on Windows */ })
+ipcMain.on('morphInstallUpdate', () => { autoUpdater.quitAndInstall() })
+
+// ── Auto-updater ──────────────────────────────────────────────────────────────
+
+function setupAutoUpdater() {
+  autoUpdater.autoDownload    = true   // download silently in background
+  autoUpdater.autoInstallOnAppQuit = false  // we control when to install
+
+  autoUpdater.on('update-available', (info) => {
+    // Notify the web view so it can show a banner
+    injectPluginStatus(dawState.isConnected, dawState.bpm, dawState.key)
+    if (win?.webContents) {
+      win.webContents.executeJavaScript(`
+        (function() {
+          var el = document.getElementById('__wm_update_banner');
+          if (el) return;
+          el = document.createElement('div');
+          el.id = '__wm_update_banner';
+          el.style.cssText = 'position:fixed;bottom:80px;right:16px;z-index:99999;background:#1a0a2e;border:1px solid #8B5CF6;border-radius:10px;padding:10px 14px;font-size:11px;font-family:system-ui,sans-serif;color:#c4b5fd;box-shadow:0 4px 20px rgba(139,92,246,0.3);cursor:pointer;';
+          el.innerHTML = '<b style="display:block;margin-bottom:3px;color:#a78bfa;">Nouvelle version disponible</b>Mise à jour en cours de téléchargement…';
+          document.body.appendChild(el);
+        })()
+      `).catch(() => {})
+    }
+  })
+
+  autoUpdater.on('update-downloaded', (info) => {
+    // Replace banner with "ready to install" prompt
+    if (win?.webContents) {
+      win.webContents.executeJavaScript(`
+        (function() {
+          var el = document.getElementById('__wm_update_banner');
+          if (!el) return;
+          el.innerHTML = '<b style="display:block;margin-bottom:3px;color:#a78bfa;">Mise à jour prête</b><span>Water Morph ${info.version} — </span><span id="__wm_install_btn" style="text-decoration:underline;cursor:pointer;color:#c4b5fd;">Redémarrer maintenant</span>';
+          document.getElementById('__wm_install_btn')?.addEventListener('click', function() {
+            window.webkit?.messageHandlers?.morphInstallUpdate?.postMessage({});
+          });
+        })()
+      `).catch(() => {})
+    }
+    // Also offer via tray menu
+    updateTrayMenu()
+  })
+
+  autoUpdater.on('error', () => { /* silent — no crash on update failure */ })
+
+  // Check on launch, then every 4 hours
+  autoUpdater.checkForUpdates().catch(() => {})
+  setInterval(() => autoUpdater.checkForUpdates().catch(() => {}), 4 * 60 * 60 * 1000)
+}
 
 // ── App lifecycle ─────────────────────────────────────────────────────────────
 
@@ -228,6 +310,7 @@ app.whenReady().then(() => {
   createTray()
   startTCPServer()
   registerAutostart()
+  setupAutoUpdater()
 })
 
 app.on('second-instance', (_event, argv) => {

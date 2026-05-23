@@ -71,6 +71,8 @@ PKG_ROOT="$(mktemp -d)/payload"
 APP_SUPPORT="$PKG_ROOT/Library/Application Support/Water"
 mkdir -p "$APP_SUPPORT"
 cp -R "$BUNDLE" "$APP_SUPPORT/"
+cp scripts/uninstall-morph.sh "$APP_SUPPORT/uninstall-morph.sh"
+chmod +x "$APP_SUPPORT/uninstall-morph.sh"
 
 pkgbuild \
     --identifier "ai.95ent.watermorph.companion" \

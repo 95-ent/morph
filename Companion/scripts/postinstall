@@ -66,6 +66,16 @@ PLIST
 
 chown "$CURRENT_USER" "$LAUNCH_AGENTS/$LABEL.plist"
 
+# ── Copy uninstall script to Application Support ──────────────────────────────
+APP_SUPPORT_DIR="$USER_HOME/Library/Application Support/Water"
+mkdir -p "$APP_SUPPORT_DIR"
+UNINSTALL_SRC="/Library/Application Support/Water/uninstall-morph.sh"
+if [ -f "$UNINSTALL_SRC" ]; then
+    cp "$UNINSTALL_SRC" "$APP_SUPPORT_DIR/uninstall-morph.sh"
+    chmod +x "$APP_SUPPORT_DIR/uninstall-morph.sh"
+    chown "$CURRENT_USER" "$APP_SUPPORT_DIR/uninstall-morph.sh"
+fi
+
 # ── 3. Start immediately — no reboot needed ──────────────────────────────────
 launchctl asuser "$USER_UID" launchctl load -w "$LAUNCH_AGENTS/$LABEL.plist"
 

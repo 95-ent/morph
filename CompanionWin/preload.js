@@ -16,6 +16,9 @@ contextBridge.exposeInMainWorld('webkit', {
     },
     morphSelect: {
       postMessage: (ids) => ipcRenderer.send('morphSelect', ids)
+    },
+    morphInstallUpdate: {
+      postMessage: () => ipcRenderer.send('morphInstallUpdate')
     }
   }
 })
