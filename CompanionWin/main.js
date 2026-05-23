@@ -78,6 +78,15 @@ function createWindow() {
     setTimeout(() => win?.loadURL(`${kBaseURL}/library?companion=windows`, { userAgent: kUA }), 3000)
   })
 
+  // Send current DAW state as soon as the page is interactive
+  win.webContents.on('did-finish-load', () => {
+    win.webContents.send('daw-state', {
+      connected: dawState.isConnected,
+      bpm: dawState.bpm,
+      key: dawState.key,
+    })
+  })
+
   win.on('close', (e) => {
     // Minimize to tray on close
     e.preventDefault()
@@ -203,9 +212,11 @@ function handleLine(conn, line) {
       dawState.isConnected = false
       updateTrayMenu()
       injectPluginStatus(false, 0, '')
+      if (win?.webContents) win.webContents.send('daw-state', { connected: false, bpm: 0, key: '' })
     }, 5000)
     updateTrayMenu()
     injectPluginStatus(true, bpm, key)
+    if (win?.webContents) win.webContents.send('daw-state', { connected: true, bpm, key })
 
   } else if (line.startsWith('TRANSPORT ')) {
     const parts   = line.slice(10).split(' ')

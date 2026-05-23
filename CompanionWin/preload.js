@@ -7,6 +7,12 @@ const { ipcRenderer, contextBridge } = require('electron')
 // does NOT change with contextIsolation: true. This flag is the canonical signal.
 contextBridge.exposeInMainWorld('__waterCompanionPlatform', 'windows')
 
+// Expose DAW state updates from main process to React components.
+// main.js sends 'daw-state' IPC when the JUCE plugin syncs BPM/Key via TCP.
+contextBridge.exposeInMainWorld('__morphDAW', {
+  onDawState: (cb) => ipcRenderer.on('daw-state', (_, data) => cb(data))
+})
+
 // Polyfill window.webkit.messageHandlers so companion-bridge.tsx works
 // identically to the macOS WKWebView environment.
 contextBridge.exposeInMainWorld('webkit', {
