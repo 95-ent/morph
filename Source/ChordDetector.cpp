@@ -265,7 +265,9 @@ ChordDetectResult chordDetectBpmAndKey (const float* mono,
     for (int k = 1; k < 24; ++k)
         if (keyScore[k] > keyScore[bestK]) bestK = k;
 
-    juce::String key = juce::String (kNotes[bestK % 12]) + (bestK < 12 ? "maj" : "min");
+    // Always display as minor: if major detected, convert to relative minor (same notes, root -3 st)
+    int displayK = (bestK < 12) ? (((bestK + 9) % 12) + 12) : bestK;
+    juce::String key = juce::String (kNotes[displayK % 12]) + "min";
 
     //==========================================================================
     // BPM — autocorrelation of full onset envelope (all frames, drums included)
