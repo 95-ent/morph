@@ -195,24 +195,72 @@ void MorphAudioProcessorEditor::paint (juce::Graphics& g)
         g.fillRoundedRectangle (barX, barY, barW * fill, 2.f, 1.f);
     }
 
-    // KEY label at bottom of box
-    g.setFont (juce::Font (10.f, juce::Font::plain));
+    // ── Scan button — bottom of KEY box ──────────────────────────────────────
     {
-        juce::String keyLabel;
-        if (audioProcessor.isAnalysing())
-            keyLabel = juce::String (juce::CharPointer_UTF8 ("detecting key\xe2\x80\xa6"));
-        else if (hasManual)
-            keyLabel = "locked  \xc2\xb7  tap to change";
-        else if (hasKey)
-            keyLabel = "auto-detect  \xc2\xb7  tap to set";
-        else if (isScanning)
-            keyLabel = juce::String (juce::CharPointer_UTF8 ("scanning\xe2\x80\xa6  "))
-                       + juce::String ((int)(scanProg * 100)) + "%";
+        const float sbW = 82.f, sbH = 26.f;
+        const float sbX = kBtnX + (kBtnW - sbW) * 0.5f;
+        const float sbY = kBtnY + kBtnH - sbH - 10.f;
+        scanRect_ = { sbX, sbY, sbW, sbH };
+
+        const bool scanning = audioProcessor.isAnalysing() || audioProcessor.getAnalysisProgress() > 0.01f;
+
+        if (scanning)
+        {
+            // Outer glow — clearly KEY is being analysed
+            g.setColour (juce::Colour (kTeal).withAlpha (0.10f));
+            g.fillRoundedRectangle (sbX - 4.f, sbY - 4.f, sbW + 8.f, sbH + 8.f, 18.f);
+            g.setColour (juce::Colour (kTeal).withAlpha (0.18f));
+            g.fillRoundedRectangle (sbX, sbY, sbW, sbH, 14.f);
+            g.setColour (juce::Colour (kTeal).withAlpha (0.55f));
+            g.drawRoundedRectangle (sbX, sbY, sbW, sbH, 14.f, 0.8f);
+            g.setFont (juce::Font (10.5f, juce::Font::bold));
+            g.setColour (juce::Colour (kTeal));
+            juce::String lbl = juce::String (juce::CharPointer_UTF8 ("\xe2\x86\xbb  "))
+                               + juce::String ((int)(scanProg * 100)) + "%";
+            g.drawText (lbl, (int)sbX, (int)sbY, (int)sbW, (int)sbH,
+                        juce::Justification::centred, false);
+        }
+        else if (!hasKey)
+        {
+            // No key yet — invite user to scan (teal, prominent)
+            g.setColour (juce::Colour (kTeal).withAlpha (0.14f));
+            g.fillRoundedRectangle (sbX, sbY, sbW, sbH, 14.f);
+            g.setColour (juce::Colour (kTeal).withAlpha (0.45f));
+            g.drawRoundedRectangle (sbX, sbY, sbW, sbH, 14.f, 0.8f);
+            g.setFont (juce::Font (10.5f, juce::Font::bold));
+            g.setColour (juce::Colour (kTeal).withAlpha (0.90f));
+            g.drawText (juce::CharPointer_UTF8 ("\xe2\x86\xbb  Scan Key"),
+                        (int)sbX, (int)sbY, (int)sbW, (int)sbH,
+                        juce::Justification::centred, false);
+        }
         else
-            keyLabel = "tap to set key";
-        g.setColour (hasKey ? juce::Colours::white.withAlpha (0.32f) : juce::Colour (kTeal).withAlpha (0.75f));
-        g.drawText (keyLabel, (int)kBtnX, (int)(kBtnY + kBtnH - 22.f), (int)kBtnW, 16,
-                    juce::Justification::centred, false);
+        {
+            // Key found — dim re-scan
+            g.setColour (juce::Colours::white.withAlpha (0.04f));
+            g.fillRoundedRectangle (sbX, sbY, sbW, sbH, 14.f);
+            g.setColour (juce::Colours::white.withAlpha (0.14f));
+            g.drawRoundedRectangle (sbX, sbY, sbW, sbH, 14.f, 0.8f);
+            g.setFont (juce::Font (10.5f, juce::Font::bold));
+            g.setColour (juce::Colours::white.withAlpha (0.35f));
+            g.drawText (juce::CharPointer_UTF8 ("\xe2\x86\xbb  Re-Scan"),
+                        (int)sbX, (int)sbY, (int)sbW, (int)sbH,
+                        juce::Justification::centred, false);
+        }
+
+        // Small context label above button
+        if (!scanning)
+        {
+            g.setFont (juce::Font (9.5f, juce::Font::plain));
+            juce::String ctx = hasManual ? "locked  \xc2\xb7  tap to change"
+                             : hasKey    ? "auto-detect  \xc2\xb7  tap to set"
+                                         : "";
+            if (ctx.isNotEmpty())
+            {
+                g.setColour (juce::Colours::white.withAlpha (0.28f));
+                g.drawText (ctx, (int)kBtnX, (int)(sbY - 16.f), (int)kBtnW, 14,
+                            juce::Justification::centred, false);
+            }
+        }
     }
 
     // Divider
@@ -230,49 +278,6 @@ void MorphAudioProcessorEditor::paint (juce::Graphics& g)
     g.drawText ("BPM", (int)half, (int)(zoneMid + 32.f), (int)(w - half), 16,
                 juce::Justification::centred, false);
 
-    // ── Scan button — premium capsule ────────────────────────────────────────
-    {
-        const float sbW = 82.f, sbH = 28.f;
-        const float sbX = half + (w - half - sbW) * 0.5f;
-        const float sbY = zoneBot - sbH - 8.f;
-        scanRect_ = { sbX, sbY, sbW, sbH };
-
-        const bool scanning = audioProcessor.isAnalysing() || audioProcessor.getAnalysisProgress() > 0.01f;
-
-        if (scanning)
-        {
-            // Outer glow
-            g.setColour (juce::Colour (kTeal).withAlpha (0.10f));
-            g.fillRoundedRectangle (sbX - 4.f, sbY - 4.f, sbW + 8.f, sbH + 8.f, 18.f);
-            // Fill
-            g.setColour (juce::Colour (kTeal).withAlpha (0.18f));
-            g.fillRoundedRectangle (sbX, sbY, sbW, sbH, 14.f);
-            // Border
-            g.setColour (juce::Colour (kTeal).withAlpha (0.55f));
-            g.drawRoundedRectangle (sbX, sbY, sbW, sbH, 14.f, 0.8f);
-            // Label
-            g.setFont (juce::Font (10.5f, juce::Font::bold));
-            g.setColour (juce::Colour (kTeal));
-            g.drawText (juce::CharPointer_UTF8 ("\xe2\x86\xbb  Scanning"),
-                        (int)sbX, (int)sbY, (int)sbW, (int)sbH,
-                        juce::Justification::centred, false);
-        }
-        else
-        {
-            // Fill
-            g.setColour (juce::Colours::white.withAlpha (0.05f));
-            g.fillRoundedRectangle (sbX, sbY, sbW, sbH, 14.f);
-            // Border
-            g.setColour (juce::Colours::white.withAlpha (0.18f));
-            g.drawRoundedRectangle (sbX, sbY, sbW, sbH, 14.f, 0.8f);
-            // Label
-            g.setFont (juce::Font (10.5f, juce::Font::bold));
-            g.setColour (juce::Colours::white.withAlpha (0.50f));
-            g.drawText (juce::CharPointer_UTF8 ("\xe2\x86\xbb  Re-Scan"),
-                        (int)sbX, (int)sbY, (int)sbW, (int)sbH,
-                        juce::Justification::centred, false);
-        }
-    }
 
     // ── Status strip ─────────────────────────────────────────────────────────
     {
