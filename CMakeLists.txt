@@ -20,7 +20,7 @@ juce_add_plugin(Morph
     FORMATS                     AU VST3
     PRODUCT_NAME                "Morph"
     IS_SYNTH                    FALSE
-    NEEDS_MIDI_INPUT            FALSE
+    NEEDS_MIDI_INPUT            TRUE
     NEEDS_MIDI_OUTPUT           FALSE
     IS_MIDI_EFFECT              FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS TRUE
@@ -39,6 +39,7 @@ target_sources(Morph PRIVATE
     Source/DropZoneComponent.cpp
     Source/WaterAPI.cpp
     Source/MorphEngine.cpp
+    Source/ChordDetector.cpp
     Source/LocalDetector.cpp
     Source/CompanionLink.cpp
 )

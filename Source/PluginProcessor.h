@@ -37,7 +37,7 @@ public:
 
     const juce::String getName() const override { return JucePlugin_Name; }
 
-    bool acceptsMidi()  const override { return false; }
+    bool acceptsMidi()  const override { return true; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
 
@@ -145,8 +145,20 @@ public:
     /** Returns the detected key string ("Dmin", "Cmaj", etc.) or "?" until first result. */
     juce::String getDetectedKey() const;
 
+    /** Returns the BRAIN-detected track BPM, or 0.0 until first result. */
+    double getDetectedTrackBPM() const;
+
     /** True while BRAIN analysis subprocess is running. */
     bool isAnalysing() const noexcept { return analysisInProgress.load(); }
+
+    /** Audio buffer fill progress (0..1).  0 = nothing recorded, 1 = full / BRAIN done. */
+    float getAnalysisProgress() const noexcept;
+
+    /** Number of consecutive BRAIN failures (capped at 3 → stop retrying). */
+    int getBrainAttempts() const noexcept { return brainAttempts.load(); }
+
+    /** Full reset: clears key, detected result, and restarts audio capture + analysis. */
+    void resetAnalysis();
 
 
     /** Key signature read from Logic's project (sharpsOrFlats*2 + (major?0:1)), -1 = unavailable. */
@@ -233,11 +245,14 @@ private:
     // BRAIN analysis — same pipeline as detect-bpm-key.py
     // Audio thread writes to analysisBuffer; background thread calls Python.
     //==========================================================================
-    static constexpr int kAnalysisSec = 5;    // seconds of audio before first BRAIN pass
+    static constexpr int kAnalysisSec = 15;   // 15s buffer — enough for essentia+librosa key detection
 
     // Buffer filled on audio thread (mono, downmixed)
     std::vector<float>      analysisBuffer;
     int                     analysisWritePos  { 0 };
+    std::atomic<int>        analysisWritePosSnapshot { 0 };  // message-thread-safe mirror
+    std::atomic<bool>       analysisResetPending { false };  // background thread signals audio thread to reset buffer
+    std::atomic<int>        brainAttempts { 0 };             // stop retrying after 3 failures
     double                  sampleRateCache   { 44100.0 };
 
     // Results — guarded by analysisLock
@@ -246,6 +261,7 @@ private:
     juce::String detectedTrackKey { "?" };
 
     std::atomic<bool> analysisInProgress { false };
+    std::atomic<bool> brainKeyConfirmed  { false };  // true once BRAIN Python returns a valid key
     double            lastAnalysisTime   { -60.0 };  // seconds since plugin start
     double            pluginRunTimeSec   { 0.0 };    // incremented in processBlock
 

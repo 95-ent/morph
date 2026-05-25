@@ -125,7 +125,7 @@ bool MorphAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) co
 
 //==============================================================================
 void MorphAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
-                                         juce::MidiBuffer& /*midiMessages*/)
+                                         juce::MidiBuffer& midiMessages)
 {
     juce::ScopedNoDenormals noDenormals;
 
@@ -152,14 +152,17 @@ void MorphAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     const double blockDuration = buffer.getNumSamples() / sampleRateCache;
     pluginRunTimeSec += blockDuration;
 
-    // Always accumulate mono audio for BRAIN analysis.
-    // Track mode uses detected BPM+key directly; Project mode uses detected key to
-    // auto-populate projectKey (BPM still comes from the DAW playhead).
+    // Always accumulate audio for key detection via BRAIN — works on all DAWs.
+    // No API exposes project key reliably; we detect it from the audio itself.
     if (buffer.getNumChannels() > 0)
     {
         const int numSamples = buffer.getNumSamples();
         const int numCh      = buffer.getNumChannels();
         const int bufSize    = static_cast<int> (analysisBuffer.size());
+
+        // Background thread signals reset on BRAIN failure — apply on audio thread
+        if (analysisResetPending.exchange (false, std::memory_order_relaxed))
+            analysisWritePos = 0;
 
         for (int i = 0; i < numSamples && analysisWritePos < bufSize; ++i)
         {
@@ -168,6 +171,9 @@ void MorphAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
                 mono += buffer.getReadPointer (ch)[i];
             analysisBuffer[analysisWritePos++] = mono / static_cast<float> (numCh);
         }
+
+        // Expose fill progress to message thread (once per block, not per sample)
+        analysisWritePosSnapshot.store (analysisWritePos, std::memory_order_relaxed);
 
         // Buffer full → trigger analysis (if not already running and cooldown elapsed)
         if (analysisWritePos >= bufSize)
@@ -330,14 +336,16 @@ bool MorphAudioProcessor::getIsPlaying() const noexcept
 //==============================================================================
 double MorphAudioProcessor::getEffectiveBPM() const noexcept
 {
-    if (referenceMode.load() == ReferenceMode::kTrack)
-    {
-        const juce::ScopedLock sl (analysisLock);
-        return detectedTrackBPM;
-    }
-    // readCurrentBPM() hits the live playhead — Logic provides project tempo
-    // even when transport is stopped, so this works without processBlock running.
-    return readCurrentBPM();
+    // Always prefer host playhead BPM — Logic provides project tempo even when
+    // transport is stopped. Track mode keeps audio-based key detection but uses
+    // the same authoritative BPM as Project mode to avoid vocal/drum analysis drift.
+    double hostBpm = readCurrentBPM();
+    if (hostBpm >= 50.0 && hostBpm <= 220.0)
+        return hostBpm;
+
+    // Playhead unavailable (rare) — fall back to audio-detected BPM.
+    const juce::ScopedLock sl (analysisLock);
+    return detectedTrackBPM;
 }
 
 juce::String MorphAudioProcessor::getDetectedKey() const
@@ -346,24 +354,39 @@ juce::String MorphAudioProcessor::getDetectedKey() const
     return detectedTrackKey;
 }
 
+double MorphAudioProcessor::getDetectedTrackBPM() const
+{
+    const juce::ScopedLock sl (analysisLock);
+    return detectedTrackBPM;
+}
+
+float MorphAudioProcessor::getAnalysisProgress() const noexcept
+{
+    const int bufSize = static_cast<int> (analysisBuffer.size());
+    if (bufSize <= 0) return 0.f;
+    const int pos = analysisWritePosSnapshot.load (std::memory_order_relaxed);
+    return juce::jlimit (0.f, 1.f, (float)pos / (float)bufSize);
+}
+
 //==============================================================================
 // BRAIN Analysis — same pipeline as detect-bpm-key.py
 //==============================================================================
 void MorphAudioProcessor::maybeScheduleAnalysis() noexcept
 {
-    // 30-second cooldown between analyses; don't run if one is already in flight
+    // Once BRAIN confirmed a key, never re-analyse — user can tap KEY to change manually
+    if (brainKeyConfirmed.load()) return;
     if (analysisInProgress.load()) return;
-    if ((pluginRunTimeSec - lastAnalysisTime) < 30.0) return;
+    if (brainAttempts.load() >= 1) return;   // one shot only — never loop
+    if ((pluginRunTimeSec - lastAnalysisTime) < 8.0) return;
 
     lastAnalysisTime = pluginRunTimeSec;
     analysisInProgress.store (true);
 
     // Take a snapshot of the buffer (audio thread → background thread handoff)
+    // Do NOT reset analysisWritePos here — buffer stays "full" while BRAIN runs,
+    // preventing spurious re-triggers. Reset only happens on failure via analysisResetPending.
     std::vector<float> snapshot = analysisBuffer;
     double sr = sampleRateCache;
-
-    // Reset write position so audio continues accumulating
-    analysisWritePos = 0;
 
     std::thread ([this, buf = std::move (snapshot), sr]() mutable
     {
@@ -373,20 +396,26 @@ void MorphAudioProcessor::maybeScheduleAnalysis() noexcept
 
 void MorphAudioProcessor::runBrainAnalysis (std::vector<float> monoBuffer, double sr)
 {
-    // 1 — C++ offline detection (no Python required, works for every user)
+    // Step 1 — C++ detection for BPM + KEY (sandbox-safe, no subprocess)
     {
         auto local = localDetectBpmAndKey (monoBuffer.data(), (int) monoBuffer.size(), sr);
-        if (local.bpm >= 50.0 && local.bpm <= 220.0)
         {
             const juce::ScopedLock sl (analysisLock);
-            detectedTrackBPM = local.bpm;
-            detectedTrackKey = local.key;
+            if (local.bpm >= 50.0 && local.bpm <= 220.0)
+                detectedTrackBPM = local.bpm;
+            if (local.key.isNotEmpty())
+                detectedTrackKey = local.key;
         }
+        // Commit key immediately — doesn't require Python, works inside Logic sandbox.
+        // Only auto-sets if user hasn't manually chosen a key yet.
         if (local.key.isNotEmpty() && getProjectKey().isEmpty())
+        {
             setProjectKey (local.key);
+            brainKeyConfirmed.store (true);
+        }
     }
 
-    // 2 — Write buffer to a temp WAV file (for Python refinement if available)
+    // Step 2 — Write buffer to JUCE temp dir (Logic sandbox allows this path)
     juce::File tmpWav = juce::File::getSpecialLocation (juce::File::tempDirectory)
                             .getChildFile ("morph_brain_analysis.wav");
 
@@ -395,6 +424,7 @@ void MorphAudioProcessor::runBrainAnalysis (std::vector<float> monoBuffer, doubl
         std::unique_ptr<juce::FileOutputStream> fos (tmpWav.createOutputStream());
         if (!fos || fos->failedToOpen())
         {
+            brainAttempts.fetch_add (1, std::memory_order_relaxed);
             analysisInProgress.store (false);
             return;
         }
@@ -402,12 +432,12 @@ void MorphAudioProcessor::runBrainAnalysis (std::vector<float> monoBuffer, doubl
             wavFmt.createWriterFor (fos.get(), sr, 1, 16, {}, 0));
         if (!writer)
         {
+            brainAttempts.fetch_add (1, std::memory_order_relaxed);
             analysisInProgress.store (false);
             return;
         }
-        fos.release(); // writer owns the stream
+        fos.release();
 
-        // Write in chunks
         constexpr int kChunk = 4096;
         int remaining = static_cast<int> (monoBuffer.size());
         int offset    = 0;
@@ -419,51 +449,36 @@ void MorphAudioProcessor::runBrainAnalysis (std::vector<float> monoBuffer, doubl
             offset    += n;
             remaining -= n;
         }
-    } // writer destructor flushes + closes
-
-    // 2 — Find Python executable
-    juce::String pythonPath;
-    for (auto& candidate : { "/opt/homebrew/bin/python3.11",
-                              "/opt/homebrew/bin/python3",
-                              "/usr/local/bin/python3",
-                              "/usr/bin/python3" })
-    {
-        if (juce::File (candidate).existsAsFile())
-        {
-            pythonPath = candidate;
-            break;
-        }
-    }
-    if (pythonPath.isEmpty())
-    {
-        analysisInProgress.store (false);
-        return;
     }
 
-    // 3 — Script path (same directory as detect-bpm-key.py in Water repo)
+    // Step 3 — Script path
     juce::String scriptPath =
         "/Users/Sebastien Graux/GRAUX Dropbox/Sébastien Graux"
         "/GRAUX_SYSTEM/02_Tech/library/scripts/detect-bpm-key.py";
 
     if (!juce::File (scriptPath).existsAsFile())
     {
+        brainAttempts.fetch_add (1, std::memory_order_relaxed);
         analysisInProgress.store (false);
         return;
     }
 
-    // 4 — Call subprocess: python3 detect-bpm-key.py /tmp/morph_brain_analysis.wav
+    // Step 4 — Call Python directly (bash -l blocked by Logic sandbox)
+    juce::String wavPath = tmpWav.getFullPathName();
+    juce::StringArray args { "/opt/homebrew/bin/python3.11", scriptPath, wavPath };
+
     juce::ChildProcess proc;
-    juce::StringArray args { pythonPath, scriptPath, tmpWav.getFullPathName() };
     if (!proc.start (args))
     {
+        brainAttempts.fetch_add (1, std::memory_order_relaxed);
         analysisInProgress.store (false);
         return;
     }
 
-    proc.waitForProcessToFinish (30000); // 30s timeout
+    proc.waitForProcessToFinish (120000);
     juce::String output = proc.readAllProcessOutput().trim();
 
-    // 5 — Parse JSON: {"bpm": 93, "key": "Dmin", "confidence": 0.85, "method": "..."}
+    // Step 5 — Parse JSON: {"bpm": 93, "key": "Dmin", "confidence": 0.85, "method": "..."}
     auto json = juce::JSON::parse (output);
     if (json.isObject())
     {
@@ -477,10 +492,20 @@ void MorphAudioProcessor::runBrainAnalysis (std::vector<float> monoBuffer, doubl
             detectedTrackKey = key;
         }
 
-        // Auto-populate projectKey only if not yet set — prevents key drift
-        // when BRAIN re-analyses subsequent audio chunks during continuous playback.
-        if (key.isNotEmpty() && key != "?" && getProjectKey().isEmpty())
+        if (key.isNotEmpty() && key != "?")
+        {
             setProjectKey (key);
+            brainKeyConfirmed.store (true);
+            brainAttempts.store (0);
+        }
+        else
+        {
+            brainAttempts.fetch_add (1, std::memory_order_relaxed);
+        }
+    }
+    else
+    {
+        brainAttempts.fetch_add (1, std::memory_order_relaxed);
     }
 
     tmpWav.deleteFile();
@@ -785,16 +810,64 @@ juce::Array<float> MorphAudioProcessor::getWaveformForLoadedTrack (int numPoints
 //==============================================================================
 // Project key
 //==============================================================================
+
+// Decode a key-signature value encoded as (sharpsOrFlats * 2 + (minor ? 1 : 0))
+// into a key string like "Bmin", "Cmaj", etc.
+// sharpsOrFlats ranges from -7 (7 flats) to +7 (7 sharps).
+// Returns empty string for out-of-range values.
+juce::String MorphAudioProcessor::decodeHostKey (int encoded) noexcept
+{
+    // encoded = sharps*2 + (minor ? 1 : 0)
+    // recover sharps and mode
+    bool isMinor = (encoded % 2 != 0);
+    if (encoded < 0 && isMinor) encoded -= 1;  // round toward zero for negatives
+    int sharps = encoded / 2;
+
+    if (sharps < -7 || sharps > 7) return {};
+
+    // Cycle of fifths, index = sharps + 7  (0 = Cb/Ab, 7 = C/A, 14 = C#/A#)
+    static const char* kMajor[] = {
+        "Cbmaj","Gbmaj","Dbmaj","Abmaj","Ebmaj","Bbmaj","Fmaj",
+        "Cmaj","Gmaj","Dmaj","Amaj","Emaj","Bmaj","F#maj","C#maj"
+    };
+    static const char* kMinor[] = {
+        "Abmin","Ebmin","Bbmin","Fmin","Cmin","Gmin","Dmin",
+        "Amin","Emin","Bmin","F#min","C#min","G#min","D#min","A#min"
+    };
+
+    int idx = sharps + 7;
+    return isMinor ? kMinor[idx] : kMajor[idx];
+}
+
 void MorphAudioProcessor::setProjectKey (const juce::String& k)
 {
     const juce::ScopedLock sl (projKeyLock);
     projectKey = k;
+    // If user clears key manually, allow BRAIN to re-detect on next audio chunk
+    if (k.isEmpty())
+    {
+        brainKeyConfirmed.store (false);
+        brainAttempts.store (0);
+        analysisWritePos = 0;
+    }
 }
 
 juce::String MorphAudioProcessor::getProjectKey() const
 {
     const juce::ScopedLock sl (projKeyLock);
     return projectKey;
+}
+
+void MorphAudioProcessor::resetAnalysis()
+{
+    // Clear project key → resets brainKeyConfirmed + brainAttempts + analysisWritePos
+    setProjectKey ({});
+    // Also clear the last detected result so UI shows scanning state immediately
+    {
+        const juce::ScopedLock sl (analysisLock);
+        detectedTrackKey = "?";
+        detectedTrackBPM = 120.0;
+    }
 }
 
 //==============================================================================

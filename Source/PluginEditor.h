@@ -6,7 +6,7 @@
 //==============================================================================
 // MorphAudioProcessorEditor — minimal bridge UI.
 //
-// One purpose: show Track / Project mode toggle, live BPM + Key, and
+// One purpose: show live BPM + Key (auto-detected from audio) and
 // companion connection state. The Water companion app owns the library.
 //==============================================================================
 class MorphAudioProcessorEditor : public juce::AudioProcessorEditor,
@@ -23,14 +23,15 @@ public:
 private:
     MorphAudioProcessor& audioProcessor;
 
-    // Hit rects computed in resized() / paint()
-    juce::Rectangle<float> toggleRect, keyPickRect, helpRect_;
+    // Hit rects computed in paint()
+    juce::Rectangle<float> keyPickRect_, helpRect_, scanRect_;
 
     void timerCallback() override;
-    int  syncTick      { 0 };
-    bool lastPlayState { false };
-    bool isMorphed_    { false };
-    int  morphPollTick_{ 0 };
+    int  syncTick       { 0 };
+    bool lastPlayState  { false };
+    bool isMorphed_     { false };
+    int  morphPollTick_ { 0 };
+    bool isPlaying_     { false };   // live DAW transport state
 
     // Brand palette
     static constexpr uint32_t kTeal   = 0xff1A90A0;   // Water teal — KEY

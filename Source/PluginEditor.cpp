@@ -1,8 +1,8 @@
 #include "PluginEditor.h"
 #include "CompanionLink.h"
 
-static constexpr int kPlugW = 380;
-static constexpr int kPlugH = 240;
+static constexpr int kPlugW = 460;
+static constexpr int kPlugH = 300;
 
 //==============================================================================
 MorphAudioProcessorEditor::MorphAudioProcessorEditor (MorphAudioProcessor& p)
@@ -12,8 +12,6 @@ MorphAudioProcessorEditor::MorphAudioProcessorEditor (MorphAudioProcessor& p)
     setSize (kPlugW, kPlugH);
     startTimer (200);
 
-    // Exact SVG path from the web app logo.tsx (viewBox 100 260 660 330).
-    // parseSVGPath returns it in source coordinates; we transform in paint().
     static const juce::String kLogoPath {
         "M546.7,571.21c-20.04-1.97-34.8-11.88-44.82-29.5"
         "-9.91-17.42-15.33-36.35-19.99-55.61-4.92-20.35-9.69-40.74-14.97-61"
@@ -42,13 +40,11 @@ MorphAudioProcessorEditor::MorphAudioProcessorEditor (MorphAudioProcessor& p)
         "-7.36,24.49-13.41,49.59-30.08,70.14-6.71,8.28-24.37,16.56-36.12,16.77Z"
     };
     {
-        // Store raw path (source coords 100–760 x, 260–590 y).
-        // drawWithin() in paint() scales it to the header slot.
         juce::Path raw = juce::Drawable::parseSVGPath (kLogoPath);
         waterLogo_ = std::make_unique<juce::DrawablePath>();
         static_cast<juce::DrawablePath*> (waterLogo_.get())->setPath (raw);
         static_cast<juce::DrawablePath*> (waterLogo_.get())
-            ->setFill (juce::FillType (juce::Colour (kTeal)));
+            ->setFill (juce::FillType (juce::Colours::white));
     }
 }
 
@@ -58,241 +54,277 @@ MorphAudioProcessorEditor::~MorphAudioProcessorEditor()
 }
 
 //==============================================================================
-void MorphAudioProcessorEditor::resized()
-{
-    const float w    = (float) getWidth();
-    const float togW = 160.f;
-    const float togH = 26.f;
-    const float togX = (w - togW) * 0.5f;
-    const float togY = 46.f;
-
-    toggleRect  = { togX, togY, togW, togH };
-    keyPickRect = { w * 0.5f + 8.f, 84.f, w * 0.5f - 20.f, 56.f };
-}
+void MorphAudioProcessorEditor::resized() {}
 
 //==============================================================================
 void MorphAudioProcessorEditor::paint (juce::Graphics& g)
 {
-    const float w = (float) getWidth();
-    const float h = (float) getHeight();
+    const float w         = (float) getWidth();
+    const float h         = (float) getHeight();
+    const bool  connected = CompanionLink::get().isConnected();
 
-    // ── Background ───────────────────────────────────────────────────────────
-    g.fillAll (juce::Colour (0xff050a0b));
+    // ── Background ────────────────────────────────────────────────────────────
+    g.fillAll (juce::Colour (0xff0a0a0a));
+
+    if (isMorphed_)
     {
-        juce::ColourGradient glow (juce::Colour (0xff091c24), 0.f, 0.f,
-                                   juce::Colour (0xff050a0b), w * 0.6f, h * 0.5f, true);
-        g.setGradientFill (glow);
-        g.fillAll();
+        g.setColour (juce::Colour (kMauve).withAlpha (0.55f));
+        g.fillRect (0.f, 0.f, w, 2.f);
+    }
+    else if (connected)
+    {
+        g.setColour (juce::Colour (kTeal).withAlpha (0.40f));
+        g.fillRect (0.f, 0.f, w, 2.f);
     }
 
-    // ── Header — logo left, connection dot right ─────────────────────────────
-    const bool connected = CompanionLink::get().isConnected();
+    // ── Header ────────────────────────────────────────────────────────────────
+    const float kHeaderH = 40.f;
+    g.setColour (juce::Colour (0xff111111));
+    g.fillRect (0.f, 2.f, w, kHeaderH - 2.f);
 
     if (waterLogo_)
     {
+        juce::Colour logoCol = isMorphed_
+            ? juce::Colour (kMauve).withAlpha (0.85f)
+            : juce::Colours::white.withAlpha (connected ? 0.75f : 0.30f);
         static_cast<juce::DrawablePath*> (waterLogo_.get())
-            ->setFill (juce::FillType (juce::Colours::white.withAlpha (0.85f)));
+            ->setFill (juce::FillType (logoCol));
         waterLogo_->drawWithin (g,
-            juce::Rectangle<float> (14.f, 9.f, 20.f, 18.f),
+            juce::Rectangle<float> (14.f, 9.f, 24.f, 22.f),
             juce::RectanglePlacement::centred, 1.0f);
     }
 
-    // Connection status — right-aligned dot + label
     {
-        const float dotR  = 4.f;
-        const float dotCX = w - 14.f - dotR;
-        const float dotCY = 18.f;
-        g.setColour (connected ? juce::Colour (0xff22c55e) : juce::Colour (0xffef4444));
+        juce::String lbl  = isMorphed_ ? juce::CharPointer_UTF8 ("\xe2\x9c\xa6  Morphed")
+                          : connected  ? "Connected to Water Studio"
+                                       : "Open Water";
+        juce::Colour col  = isMorphed_ ? juce::Colour (kMauve).withAlpha (0.85f)
+                          : connected  ? juce::Colour (kTeal).withAlpha (0.85f)
+                                       : juce::Colours::white.withAlpha (0.22f);
+        g.setFont (juce::Font (10.f, juce::Font::bold));
+        g.setColour (col);
+        g.drawText (lbl, 44, 0, (int)(w - 88.f), (int)kHeaderH,
+                    juce::Justification::centred, false);
+    }
+
+    {
+        const float dotR  = 3.5f;
+        const float dotCX = w - 16.f;
+        const float dotCY = kHeaderH * 0.5f;
+        juce::Colour dotCol = isMorphed_ ? juce::Colour (kMauve)
+                            : connected  ? juce::Colour (kTeal)
+                                         : juce::Colours::white.withAlpha (0.15f);
+        g.setColour (dotCol);
         g.fillEllipse (dotCX - dotR, dotCY - dotR, dotR * 2.f, dotR * 2.f);
-
-        g.setFont (juce::Font (10.f));
-        g.setColour (connected ? juce::Colour (0xff86efac) : juce::Colour (0xfffca5a5));
-        const juce::String connLabel = connected ? "Connected" : "Open Water";
-        g.drawText (connLabel, 40, 9, (int)(w - 60.f), 18, juce::Justification::centred, false);
-
-        helpRect_ = juce::Rectangle<float> (dotCX - dotR - 4.f, 6.f, dotR * 2.f + 28.f, 24.f);
+        helpRect_ = { 0.f, 0.f, w, kHeaderH };
     }
 
-    // Hairline
-    g.setColour (juce::Colour (0xff1a2028));
-    g.fillRect (0.f, 34.f, w, 1.f);
-
-    // ── Mode toggle ──────────────────────────────────────────────────────────
-    using Mode = MorphAudioProcessor::ReferenceMode;
-    const bool isTrack = audioProcessor.getReferenceMode() == Mode::kTrack;
-
-    const float tr    = toggleRect.getX();
-    const float ty    = toggleRect.getY();
-    const float tw    = toggleRect.getWidth();
-    const float th    = toggleRect.getHeight();
-    const float halfW = tw * 0.5f;
-
-    g.setColour (juce::Colour (0xff0c1318));
-    g.fillRoundedRectangle (toggleRect, th * 0.5f);
     g.setColour (juce::Colours::white.withAlpha (0.07f));
-    g.drawRoundedRectangle (toggleRect, th * 0.5f, 1.f);
+    g.fillRect (0.f, kHeaderH, w, 1.f);
 
-    // Active pill
-    const float pillW = halfW - 3.f;
-    const float pillH = th - 6.f;
-    const float pillY = ty + 3.f;
-    const float pillX = isTrack ? tr + halfW + 0.f : tr + 3.f;
-    {
-        juce::ColourGradient pg (juce::Colour (kTeal), pillX, pillY,
-                                 juce::Colour (0xff0f7282), pillX + pillW, pillY, false);
-        g.setGradientFill (pg);
-        g.fillRoundedRectangle (pillX, pillY, pillW, pillH, pillH * 0.5f);
-    }
+    // ── BPM + KEY ─────────────────────────────────────────────────────────────
+    // Manual key overrides auto-detected key. Auto-detection is a fallback only.
+    const juce::String manualKey   = audioProcessor.getProjectKey();
+    const juce::String detectedKey = audioProcessor.getDetectedKey();
+    const bool hasManual  = manualKey.isNotEmpty();
+    const bool hasDetected = detectedKey.isNotEmpty() && detectedKey != "?";
 
-    g.setFont (juce::Font (11.f, juce::Font::bold));
-    g.setColour (!isTrack ? juce::Colours::white : juce::Colour (0xff4b5563));
-    g.drawText ("Project", (int)tr, (int)ty, (int)halfW, (int)th, juce::Justification::centred, false);
-    g.setColour (isTrack ? juce::Colours::white : juce::Colour (0xff4b5563));
-    g.drawText ("Track",   (int)(tr + halfW), (int)ty, (int)halfW, (int)th, juce::Justification::centred, false);
+    const juce::String key    = hasManual ? manualKey : (hasDetected ? detectedKey : "");
+    const bool         hasKey = key.isNotEmpty();
 
-    // ── BPM + KEY — big centred readout ──────────────────────────────────────
-    const double       bpm    = audioProcessor.getEffectiveBPM();
-    const juce::String key    = isTrack ? audioProcessor.getDetectedKey()
-                                        : audioProcessor.getProjectKey();
-    const bool         hasBpm = (bpm > 0.0);
-    const bool         hasKey = (key.isNotEmpty() && key != "?");
+    const float  scanProg    = audioProcessor.getAnalysisProgress();   // 0..1 buffer fill
+    const bool   brainGaveUp = audioProcessor.getBrainAttempts() >= 1;
+    const bool   isScanning  = !hasKey && !audioProcessor.isAnalysing() && scanProg > 0.01f && !brainGaveUp;
+
+    const double bpm    = audioProcessor.getEffectiveBPM();
+    const bool   hasBpm = (bpm > 0.0);
 
     const juce::String bpmStr = hasBpm ? juce::String ((int)std::round (bpm)) : "--";
     const juce::String keyStr = hasKey ? key : "--";
 
-    const juce::Colour valueCol = isMorphed_             ? juce::Colour (kMauve)
-                                : (connected && hasBpm)   ? juce::Colour (0xfff0f4f8)
-                                : hasBpm                  ? juce::Colour (kTeal)
-                                :                           juce::Colour (0xff374151);
+    juce::Colour valueCol;
+    if (isMorphed_)  valueCol = juce::Colour (kMauve);
+    else if (hasKey) valueCol = juce::Colours::white.withAlpha (0.92f);
+    else             valueCol = juce::Colours::white.withAlpha (0.18f);
 
-    // Vertical centre of the data zone (between toggle and status)
-    const float zoneTop = ty + th + 8.f;
-    const float zoneBot = h - 42.f;
+    const float zoneTop = kHeaderH + 12.f;
+    const float zoneBot = h - 40.f;
     const float zoneMid = (zoneTop + zoneBot) * 0.5f;
+    const float half    = w * 0.5f;
 
-    const float half = w * 0.5f;
+    // KEY tap zone — full left column, clearly bounded
+    const float kBtnX = 8.f;
+    const float kBtnY = zoneTop + 4.f;
+    const float kBtnW = half - 16.f;
+    const float kBtnH = zoneBot - zoneTop - 8.f;
+    keyPickRect_ = { kBtnX, kBtnY, kBtnW, kBtnH };
 
-    // BPM — right half of left panel
-    g.setFont (juce::Font (38.f, juce::Font::bold));
-    g.setColour (valueCol);
-    g.drawText (bpmStr, 0, (int)(zoneMid - 24.f), (int)(half - 12.f), 48,
-                juce::Justification::centredRight, false);
-    g.setFont (juce::Font (9.5f));
-    g.setColour (juce::Colour (0xff4b5563));
-    g.drawText ("BPM", 0, (int)(zoneMid + 24.f), (int)(half - 12.f), 14,
-                juce::Justification::centredRight, false);
+    // KEY area background — always visible, signals it's tappable
+    g.setColour (juce::Colour (0xff161616));
+    g.fillRoundedRectangle (kBtnX, kBtnY, kBtnW, kBtnH, 12.f);
+    juce::Colour borderCol = hasKey
+        ? (isMorphed_ ? juce::Colour (kMauve).withAlpha (0.45f) : juce::Colour (kTeal).withAlpha (0.35f))
+        : juce::Colours::white.withAlpha (0.12f);
+    g.setColour (borderCol);
+    g.drawRoundedRectangle (kBtnX, kBtnY, kBtnW, kBtnH, 12.f, 1.f);
+
+    // KEY value — large, centered in box
+    const float kValCX = kBtnX + kBtnW * 0.5f;
+    const float kValCY = kBtnY + kBtnH * 0.5f - 8.f;
+    g.setFont (juce::Font (40.f, juce::Font::plain));
+    g.setColour (hasKey ? valueCol : juce::Colours::white.withAlpha (0.13f));
+    g.drawText (keyStr, (int)kBtnX, (int)(kValCY - 24.f), (int)kBtnW, 48,
+                juce::Justification::centred, false);
+
+    // Scanning progress bar — thin fill along bottom of KEY box
+    if (isScanning || audioProcessor.isAnalysing())
+    {
+        const float barX  = kBtnX + 10.f;
+        const float barY  = kBtnY + kBtnH - 5.f;
+        const float barW  = kBtnW - 20.f;
+        g.setColour (juce::Colours::white.withAlpha (0.07f));
+        g.fillRoundedRectangle (barX, barY, barW, 2.f, 1.f);
+        float fill = audioProcessor.isAnalysing() ? 1.f : scanProg;
+        g.setColour (juce::Colour (kTeal).withAlpha (0.55f));
+        g.fillRoundedRectangle (barX, barY, barW * fill, 2.f, 1.f);
+    }
+
+    // KEY label at bottom of box
+    g.setFont (juce::Font (9.f, juce::Font::plain));
+    {
+        juce::String keyLabel;
+        if (audioProcessor.isAnalysing())
+            keyLabel = juce::String (juce::CharPointer_UTF8 ("detecting key\xe2\x80\xa6"));
+        else if (hasManual)
+            keyLabel = juce::String (juce::CharPointer_UTF8 ("set  \xe2\x96\xbe  tap to change"));
+        else if (hasKey)
+            keyLabel = juce::String (juce::CharPointer_UTF8 ("auto  \xe2\x80\x94  tap to correct"));
+        else if (isScanning)
+            keyLabel = juce::String (juce::CharPointer_UTF8 ("scanning\xe2\x80\xa6  "))
+                       + juce::String ((int)(scanProg * 100)) + "%";
+        else
+            keyLabel = juce::String (juce::CharPointer_UTF8 ("tap to set  \xe2\x96\xbe"));
+        g.setColour (hasKey ? juce::Colours::white.withAlpha (0.28f) : juce::Colour (kTeal).withAlpha (0.70f));
+        g.drawText (keyLabel, (int)kBtnX, (int)(kBtnY + kBtnH - 20.f), (int)kBtnW, 14,
+                    juce::Justification::centred, false);
+    }
 
     // Divider
-    g.setColour (juce::Colour (0xff1e2530));
+    g.setColour (juce::Colours::white.withAlpha (0.07f));
     g.fillRect (half - 0.5f, zoneMid - 20.f, 1.f, 40.f);
 
-    // KEY — left half of right panel
-    g.setFont (juce::Font (38.f, juce::Font::bold));
+    // BPM — centered in right half
+    g.setFont (juce::Font (44.f, juce::Font::plain));
     g.setColour (valueCol);
-    g.drawText (keyStr, (int)(half + 12.f), (int)(zoneMid - 24.f), (int)(half - 20.f), 48,
-                juce::Justification::centredLeft, false);
-    g.setFont (juce::Font (9.5f));
-    g.setColour (juce::Colour (0xff4b5563));
-    g.drawText (isTrack ? "KEY  auto" : "KEY  tap",
-                (int)(half + 12.f), (int)(zoneMid + 24.f), (int)(half - 20.f), 14,
-                juce::Justification::centredLeft, false);
+    g.drawText (bpmStr, (int)half, (int)(zoneMid - 28.f), (int)(w - half), 56,
+                juce::Justification::centred, false);
 
-    // Tap underline — Project mode only
-    if (!isTrack && hasKey)
+    g.setFont (juce::Font (9.f, juce::Font::plain));
+    g.setColour (juce::Colours::white.withAlpha (0.22f));
+    g.drawText ("BPM", (int)half, (int)(zoneMid + 30.f), (int)(w - half), 14,
+                juce::Justification::centred, false);
+
+    // ── Scan button — bottom of BPM panel ────────────────────────────────────
     {
-        g.setColour (valueCol.withAlpha (0.22f));
-        g.fillRect (half + 12.f, zoneMid + 23.f, 48.f, 1.f);
+        const float sbW = 68.f, sbH = 22.f;
+        const float sbX = half + (w - half - sbW) * 0.5f;
+        const float sbY = zoneBot - sbH - 6.f;
+        scanRect_ = { sbX, sbY, sbW, sbH };
+
+        const bool scanning = audioProcessor.isAnalysing() || audioProcessor.getAnalysisProgress() > 0.01f;
+        juce::Colour btnBg  = scanning
+            ? juce::Colour (kTeal).withAlpha (0.18f)
+            : juce::Colours::white.withAlpha (0.06f);
+        juce::Colour btnFg  = scanning
+            ? juce::Colour (kTeal).withAlpha (0.85f)
+            : juce::Colours::white.withAlpha (0.35f);
+
+        g.setColour (btnBg);
+        g.fillRoundedRectangle (scanRect_, 6.f);
+        g.setColour (btnFg);
+        g.drawRoundedRectangle (scanRect_, 6.f, 0.7f);
+
+        g.setFont (juce::Font (9.5f, juce::Font::bold));
+        g.setColour (btnFg);
+        juce::String scanLbl = scanning
+            ? juce::CharPointer_UTF8 ("\xe2\x86\xbb  Scanning")
+            : juce::CharPointer_UTF8 ("\xe2\x86\xbb  Re-Scan");
+        g.drawText (scanLbl, (int)sbX, (int)sbY, (int)sbW, (int)sbH,
+                    juce::Justification::centred, false);
     }
 
     // ── Status strip ─────────────────────────────────────────────────────────
     {
-        const float sy = h - 40.f;
-        g.setColour (juce::Colour (0xff070d10));
-        g.fillRect (0.f, sy, w, 40.f);
-        g.setColour (juce::Colour (0xff1a2028));
+        const float sy = h - 38.f;
+        g.setColour (juce::Colour (0xff0d0d0d));
+        g.fillRect (0.f, sy, w, 38.f);
+        g.setColour (juce::Colours::white.withAlpha (0.06f));
         g.fillRect (0.f, sy, w, 1.f);
 
         juce::String msg;
-        juce::Colour col = juce::Colour (0xff374151);
+        juce::Colour col = juce::Colours::white.withAlpha (0.20f);
 
         if (audioProcessor.isAnalysing())
         {
-            msg = juce::CharPointer_UTF8 ("\xe2\x96\xb6  Scanning\xe2\x80\xa6");
+            msg = juce::CharPointer_UTF8 ("\xe2\x96\xb6  Detecting key\xe2\x80\xa6");
             col = juce::Colour (kTeal);
         }
-        else if (isTrack)
+        else if (hasKey)
         {
-            const juce::String k = audioProcessor.getDetectedKey();
-            if (k.isNotEmpty() && k != "?")
-            {
-                msg = juce::String (juce::CharPointer_UTF8 ("\xe2\x9c\x93  ")) + k
-                      + "  " + juce::String ((int)std::round (audioProcessor.getEffectiveBPM())) + " BPM";
-                col = juce::Colour (0xff6b7280);
-            }
-            else
-                msg = "Play audio to scan";
+            msg = juce::String (juce::CharPointer_UTF8 ("\xe2\x9c\x93  ")) + key
+                  + "  \xe2\x80\x94  " + juce::String ((int)std::round (bpm)) + " BPM"
+                  + "   \xe2\x80\x94  tap KEY to change";
+            col = isMorphed_ ? juce::Colour (kMauve).withAlpha (0.7f)
+                             : juce::Colours::white.withAlpha (0.30f);
+        }
+        else if (isScanning)
+        {
+            msg = juce::String (juce::CharPointer_UTF8 ("\xe2\x97\x8f  Scanning audio\xe2\x80\xa6  "))
+                  + juce::String ((int)(scanProg * 100)) + "%  \xe2\x80\x94  keep playing";
+            col = juce::Colour (kTeal).withAlpha (0.80f);
+        }
+        else if (brainGaveUp)
+        {
+            msg = juce::CharPointer_UTF8 ("Could not detect key  \xe2\x80\x94  tap KEY to set manually");
+            col = juce::Colours::white.withAlpha (0.30f);
         }
         else
         {
-            const juce::String k = audioProcessor.getProjectKey();
-            msg = k.isEmpty() ? "Tap KEY to set project key" : juce::CharPointer_UTF8 ("\xe2\x9c\x93  Key locked");
-            if (!k.isEmpty()) col = juce::Colour (0xff6b7280);
+            msg = juce::CharPointer_UTF8 ("Play your session  \xe2\x80\x94  key detects automatically");
         }
 
         g.setFont (juce::Font (10.5f));
         g.setColour (col);
-        g.drawText (msg, 16, (int)(sy + 12), (int)(w - 32), 16,
+        g.drawText (msg, 16, (int)(sy + 12), (int)(w - 52), 16,
                     juce::Justification::centredLeft, false);
+
+        g.setFont (juce::Font (8.f));
+        g.setColour (juce::Colours::white.withAlpha (0.18f));
+        g.drawText ("v1.0", 0, (int)(sy + 12), (int)(w - 12), 16,
+                    juce::Justification::centredRight, false);
     }
 }
 
 //==============================================================================
 void MorphAudioProcessorEditor::mouseUp (const juce::MouseEvent& e)
 {
-    using Mode = MorphAudioProcessor::ReferenceMode;
-    auto pt = e.position;
+    const auto pt = e.position;
 
     if (helpRect_.contains (pt))
     {
-        // Show the companion window (Electron app). Falls back to watermorph://
-        // protocol if companion is not connected, which launches it if installed.
         CompanionLink::get().requestShowWindow();
         return;
     }
 
-    if (toggleRect.contains (pt))
+    if (scanRect_.contains (pt))
     {
-        // Left half = Project, right half = Track
-        if (pt.x < toggleRect.getCentreX())
-            audioProcessor.setReferenceMode (Mode::kProject);
-        else
-            audioProcessor.setReferenceMode (Mode::kTrack);
-    }
-    else if (keyPickRect.contains (pt)
-             && audioProcessor.getReferenceMode() == Mode::kTrack)
-    {
-        // Track mode: open native file picker → BRAIN analyzes full file instantly
-        // (no playback needed; file stays local, optionally uploaded to Water)
-        auto chooser = std::make_shared<juce::FileChooser> (
-            "Select audio file to analyze",
-            juce::File::getSpecialLocation (juce::File::userMusicDirectory),
-            "*.wav;*.mp3;*.aiff;*.aif;*.flac;*.m4a",
-            false);
-
-        chooser->launchAsync (
-            juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
-            [this, chooser] (const juce::FileChooser& fc)
-            {
-                auto f = fc.getResult();
-                if (f.existsAsFile())
-                    audioProcessor.analyzeFileDirectly (f);
-            });
+        audioProcessor.resetAnalysis();
+        repaint();
         return;
     }
-    else if (keyPickRect.contains (pt)
-             && audioProcessor.getReferenceMode() == Mode::kProject)
+
+    if (keyPickRect_.contains (pt))
     {
-        // Key picker popup — 24 keys (12 maj + 12 min)
         static const char* kKeys[] = {
             "Cmaj","Dbmaj","Dmaj","Ebmaj","Emaj","Fmaj",
             "F#maj","Gmaj","Abmaj","Amaj","Bbmaj","Bmaj",
@@ -301,16 +333,20 @@ void MorphAudioProcessorEditor::mouseUp (const juce::MouseEvent& e)
         };
 
         juce::PopupMenu menu;
+        const juce::String cur = audioProcessor.getProjectKey();
+        if (cur.isNotEmpty())
+            menu.addItem (25, "Clear (use auto-detect)", true, false);
         menu.addSectionHeader ("Major");
         for (int i = 0; i < 12; ++i)
-            menu.addItem (i + 1, juce::String (kKeys[i]),
-                          true, audioProcessor.getProjectKey() == kKeys[i]);
+            menu.addItem (i + 1, juce::String (kKeys[i]), true, cur == kKeys[i]);
         menu.addSectionHeader ("Minor");
         for (int i = 12; i < 24; ++i)
-            menu.addItem (i + 1, juce::String (kKeys[i]),
-                          true, audioProcessor.getProjectKey() == kKeys[i]);
+            menu.addItem (i + 1, juce::String (kKeys[i]), true, cur == kKeys[i]);
 
-        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this),
+        auto screenRect = localAreaToGlobal (keyPickRect_.toNearestInt());
+        menu.showMenuAsync (juce::PopupMenu::Options()
+                                .withTargetScreenArea (screenRect)
+                                .withMinimumWidth (130),
             [this] (int result)
             {
                 static const char* kKeys[] = {
@@ -319,7 +355,9 @@ void MorphAudioProcessorEditor::mouseUp (const juce::MouseEvent& e)
                     "Cmin","Dbmin","Dmin","Ebmin","Emin","Fmin",
                     "F#min","Gmin","Abmin","Amin","Bbmin","Bmin"
                 };
-                if (result >= 1 && result <= 24)
+                if (result == 25)
+                    audioProcessor.setProjectKey ({});
+                else if (result >= 1 && result <= 24)
                     audioProcessor.setProjectKey (kKeys[result - 1]);
             });
         return;
@@ -333,8 +371,7 @@ void MorphAudioProcessorEditor::timerCallback()
 {
     repaint();
 
-    // Poll morphed state from companion (written by WaterMorphCompanion when React lock changes)
-    if (++morphPollTick_ >= 3)  // every 600ms (3 × 200ms timer)
+    if (++morphPollTick_ >= 3)
     {
         morphPollTick_ = 0;
         const juce::File stateFile ("/tmp/water-morph-isMorphed");
@@ -345,18 +382,12 @@ void MorphAudioProcessorEditor::timerCallback()
         }
     }
 
-    using Mode = MorphAudioProcessor::ReferenceMode;
-    const bool trackMode  = audioProcessor.getReferenceMode() == Mode::kTrack;
     const double bpm      = audioProcessor.getEffectiveBPM();
     const double ppq      = audioProcessor.readCurrentPPQPosition();
     const double timeSecs = (bpm > 0.0) ? (ppq / bpm * 60.0) : 0.0;
     const bool   playing  = audioProcessor.getIsPlaying();
+    isPlaying_ = playing;
 
-    // Send TRANSPORT on every tick while playing so the web player stays
-    // phase-locked to the DAW grid — especially critical when the user
-    // switches to a new loop mid-session (new loop starts at 0, TRANSPORT
-    // immediately seeks it to the correct bar-relative position).
-    // When stopped, only send on the transition to avoid redundant pauses.
     if (playing)
     {
         CompanionLink::get().sendTransport (true, timeSecs, ppq);
@@ -368,13 +399,11 @@ void MorphAudioProcessorEditor::timerCallback()
         CompanionLink::get().sendTransport (false, timeSecs, ppq);
     }
 
-    if (++syncTick >= 5)   // 5 × 200 ms = 1 s
+    if (++syncTick >= 5)
     {
         syncTick = 0;
-        const juce::String key = trackMode ? audioProcessor.getDetectedKey()
-                                           : audioProcessor.getProjectKey();
-        CompanionLink::get().sendSync (bpm, key,
-                                       trackMode ? "track" : "project",
-                                       timeSecs);
+        const juce::String manualKey  = audioProcessor.getProjectKey();
+        const juce::String key = manualKey.isNotEmpty() ? manualKey : audioProcessor.getDetectedKey();
+        CompanionLink::get().sendSync (bpm, key, manualKey.isNotEmpty() ? "set" : "auto", timeSecs);
     }
 }

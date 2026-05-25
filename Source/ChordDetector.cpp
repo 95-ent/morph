@@ -1,5 +1,5 @@
 #define _USE_MATH_DEFINES
-#include "LocalDetector.h"
+#include "ChordDetector.h"
 #include <cmath>
 #include <algorithm>
 #include <vector>
@@ -87,7 +87,7 @@ static float pearsonCorr (const float* a, const float* b, int n)
 }
 
 //==============================================================================
-LocalDetectResult localDetectBpmAndKey (const float* mono,
+ChordDetectResult chordDetectBpmAndKey (const float* mono,
                                         int          numSamples,
                                         double       sampleRate)
 {

@@ -26,6 +26,7 @@
       }
     ],
     "win": {
+      "icon": "assets/icon.ico",
       "target": [
         {
           "target": "nsis",
@@ -34,9 +35,10 @@
           ]
         }
       ],
-      "artifactName": "Water_Morph_1.0.5_Windows.exe"
+      "artifactName": "Water_Morph_${version}_Windows.exe"
     },
     "mac": {
+      "icon": "assets/icon.icns",
       "target": [
         {
           "target": "dmg",
@@ -46,11 +48,11 @@
           ]
         }
       ],
-      "artifactName": "Water_Morph_1.0.3_macOS.dmg"
+      "artifactName": "Water_Morph_${version}_macOS.dmg"
     },
     "nsis": {
       "oneClick": true,
-      "perMachine": true,
+      "perMachine": false,
       "allowToChangeInstallationDirectory": false,
       "runAfterFinish": true,
       "createStartMenuShortcut": true,
