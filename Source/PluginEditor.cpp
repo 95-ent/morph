@@ -168,12 +168,18 @@ void MorphAudioProcessorEditor::paint (juce::Graphics& g)
     g.setColour (borderCol);
     g.drawRoundedRectangle (kBtnX, kBtnY, kBtnW, kBtnH, 12.f, 1.f);
 
-    // KEY value — large, centered in box
+    // KEY — small label at top of box
+    g.setFont (juce::Font (9.f, juce::Font::plain));
+    g.setColour (juce::Colours::white.withAlpha (hasKey ? 0.28f : 0.13f));
+    g.drawText ("KEY", (int)kBtnX, (int)(kBtnY + 9.f), (int)kBtnW, 12,
+                juce::Justification::centred, false);
+
+    // KEY value — large, bold, centered in box
     const float kValCX = kBtnX + kBtnW * 0.5f;
-    const float kValCY = kBtnY + kBtnH * 0.5f - 8.f;
-    g.setFont (juce::Font (40.f, juce::Font::plain));
+    const float kValCY = kBtnY + kBtnH * 0.5f - 4.f;
+    g.setFont (juce::Font (44.f, juce::Font::bold));
     g.setColour (hasKey ? valueCol : juce::Colours::white.withAlpha (0.13f));
-    g.drawText (keyStr, (int)kBtnX, (int)(kValCY - 24.f), (int)kBtnW, 48,
+    g.drawText (keyStr, (int)kBtnX, (int)(kValCY - 26.f), (int)kBtnW, 52,
                 juce::Justification::centred, false);
 
     // Scanning progress bar — thin fill along bottom of KEY box
@@ -190,22 +196,22 @@ void MorphAudioProcessorEditor::paint (juce::Graphics& g)
     }
 
     // KEY label at bottom of box
-    g.setFont (juce::Font (9.f, juce::Font::plain));
+    g.setFont (juce::Font (10.f, juce::Font::plain));
     {
         juce::String keyLabel;
         if (audioProcessor.isAnalysing())
             keyLabel = juce::String (juce::CharPointer_UTF8 ("detecting key\xe2\x80\xa6"));
         else if (hasManual)
-            keyLabel = juce::String (juce::CharPointer_UTF8 ("set  \xe2\x96\xbe  tap to change"));
+            keyLabel = "locked  \xc2\xb7  tap to change";
         else if (hasKey)
-            keyLabel = juce::String (juce::CharPointer_UTF8 ("auto  \xe2\x80\x94  tap to correct"));
+            keyLabel = "auto-detect  \xc2\xb7  tap to set";
         else if (isScanning)
             keyLabel = juce::String (juce::CharPointer_UTF8 ("scanning\xe2\x80\xa6  "))
                        + juce::String ((int)(scanProg * 100)) + "%";
         else
-            keyLabel = juce::String (juce::CharPointer_UTF8 ("tap to set  \xe2\x96\xbe"));
-        g.setColour (hasKey ? juce::Colours::white.withAlpha (0.28f) : juce::Colour (kTeal).withAlpha (0.70f));
-        g.drawText (keyLabel, (int)kBtnX, (int)(kBtnY + kBtnH - 20.f), (int)kBtnW, 14,
+            keyLabel = "tap to set key";
+        g.setColour (hasKey ? juce::Colours::white.withAlpha (0.32f) : juce::Colour (kTeal).withAlpha (0.75f));
+        g.drawText (keyLabel, (int)kBtnX, (int)(kBtnY + kBtnH - 22.f), (int)kBtnW, 16,
                     juce::Justification::centred, false);
     }
 
@@ -214,43 +220,58 @@ void MorphAudioProcessorEditor::paint (juce::Graphics& g)
     g.fillRect (half - 0.5f, zoneMid - 20.f, 1.f, 40.f);
 
     // BPM — centered in right half
-    g.setFont (juce::Font (44.f, juce::Font::plain));
+    g.setFont (juce::Font (48.f, juce::Font::bold));
     g.setColour (valueCol);
-    g.drawText (bpmStr, (int)half, (int)(zoneMid - 28.f), (int)(w - half), 56,
+    g.drawText (bpmStr, (int)half, (int)(zoneMid - 30.f), (int)(w - half), 58,
                 juce::Justification::centred, false);
 
-    g.setFont (juce::Font (9.f, juce::Font::plain));
-    g.setColour (juce::Colours::white.withAlpha (0.22f));
-    g.drawText ("BPM", (int)half, (int)(zoneMid + 30.f), (int)(w - half), 14,
+    g.setFont (juce::Font (10.f, juce::Font::plain));
+    g.setColour (juce::Colours::white.withAlpha (0.25f));
+    g.drawText ("BPM", (int)half, (int)(zoneMid + 32.f), (int)(w - half), 16,
                 juce::Justification::centred, false);
 
-    // ── Scan button — bottom of BPM panel ────────────────────────────────────
+    // ── Scan button — premium capsule ────────────────────────────────────────
     {
-        const float sbW = 68.f, sbH = 22.f;
+        const float sbW = 82.f, sbH = 28.f;
         const float sbX = half + (w - half - sbW) * 0.5f;
-        const float sbY = zoneBot - sbH - 6.f;
+        const float sbY = zoneBot - sbH - 8.f;
         scanRect_ = { sbX, sbY, sbW, sbH };
 
         const bool scanning = audioProcessor.isAnalysing() || audioProcessor.getAnalysisProgress() > 0.01f;
-        juce::Colour btnBg  = scanning
-            ? juce::Colour (kTeal).withAlpha (0.18f)
-            : juce::Colours::white.withAlpha (0.06f);
-        juce::Colour btnFg  = scanning
-            ? juce::Colour (kTeal).withAlpha (0.85f)
-            : juce::Colours::white.withAlpha (0.35f);
 
-        g.setColour (btnBg);
-        g.fillRoundedRectangle (scanRect_, 6.f);
-        g.setColour (btnFg);
-        g.drawRoundedRectangle (scanRect_, 6.f, 0.7f);
-
-        g.setFont (juce::Font (9.5f, juce::Font::bold));
-        g.setColour (btnFg);
-        juce::String scanLbl = scanning
-            ? juce::CharPointer_UTF8 ("\xe2\x86\xbb  Scanning")
-            : juce::CharPointer_UTF8 ("\xe2\x86\xbb  Re-Scan");
-        g.drawText (scanLbl, (int)sbX, (int)sbY, (int)sbW, (int)sbH,
-                    juce::Justification::centred, false);
+        if (scanning)
+        {
+            // Outer glow
+            g.setColour (juce::Colour (kTeal).withAlpha (0.10f));
+            g.fillRoundedRectangle (sbX - 4.f, sbY - 4.f, sbW + 8.f, sbH + 8.f, 18.f);
+            // Fill
+            g.setColour (juce::Colour (kTeal).withAlpha (0.18f));
+            g.fillRoundedRectangle (sbX, sbY, sbW, sbH, 14.f);
+            // Border
+            g.setColour (juce::Colour (kTeal).withAlpha (0.55f));
+            g.drawRoundedRectangle (sbX, sbY, sbW, sbH, 14.f, 0.8f);
+            // Label
+            g.setFont (juce::Font (10.5f, juce::Font::bold));
+            g.setColour (juce::Colour (kTeal));
+            g.drawText (juce::CharPointer_UTF8 ("\xe2\x86\xbb  Scanning"),
+                        (int)sbX, (int)sbY, (int)sbW, (int)sbH,
+                        juce::Justification::centred, false);
+        }
+        else
+        {
+            // Fill
+            g.setColour (juce::Colours::white.withAlpha (0.05f));
+            g.fillRoundedRectangle (sbX, sbY, sbW, sbH, 14.f);
+            // Border
+            g.setColour (juce::Colours::white.withAlpha (0.18f));
+            g.drawRoundedRectangle (sbX, sbY, sbW, sbH, 14.f, 0.8f);
+            // Label
+            g.setFont (juce::Font (10.5f, juce::Font::bold));
+            g.setColour (juce::Colours::white.withAlpha (0.50f));
+            g.drawText (juce::CharPointer_UTF8 ("\xe2\x86\xbb  Re-Scan"),
+                        (int)sbX, (int)sbY, (int)sbW, (int)sbH,
+                        juce::Justification::centred, false);
+        }
     }
 
     // ── Status strip ─────────────────────────────────────────────────────────
