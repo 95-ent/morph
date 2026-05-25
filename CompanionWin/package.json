@@ -1,6 +1,6 @@
 {
   "name": "water-morph-helper",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Water Morph companion — Windows",
   "main": "main.js",
   "scripts": {
@@ -35,7 +35,7 @@
           ]
         }
       ],
-      "artifactName": "Water_Morph_${version}_Windows.exe"
+      "artifactName": "Water_Morph_Windows.exe"
     },
     "mac": {
       "icon": "assets/icon.icns",
