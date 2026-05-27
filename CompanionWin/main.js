@@ -23,9 +23,10 @@ app.setAsDefaultProtocolClient('watermorph')
 
 // ── State ────────────────────────────────────────────────────────────────────
 
-let win   = null
-let tray  = null
-let dawState = { bpm: 0, key: '', isConnected: false }
+let win        = null
+let tray       = null
+let isQuitting = false   // set to true before any real quit so close handler doesn't fight it
+let dawState   = { bpm: 0, key: '', isConnected: false }
 
 // ── Window ───────────────────────────────────────────────────────────────────
 
@@ -62,9 +63,15 @@ function createWindow() {
   // and the web app renders the full browser UI instead of the companion UI.
   win.webContents.session.setUserAgent(kUA)
 
-  win.loadURL(`${kBaseURL}/library?companion=windows`, {
-    userAgent: kUA,
-    extraHeaders: 'X-Water-Companion: windows\n'
+  // Clear service worker + cache on every launch so stale Next.js HTML never
+  // causes React hydration mismatch (#418) between cached server HTML and new JS.
+  win.webContents.session.clearStorageData({
+    storages: ['serviceworkers', 'cachestorage']
+  }).catch(() => {}).finally(() => {
+    win.loadURL(`${kBaseURL}/discover?companion=windows`, {
+      userAgent: kUA,
+      extraHeaders: 'X-Water-Companion: windows\n'
+    })
   })
 
   win.webContents.on('before-input-event', (_event, input) => {
@@ -75,11 +82,12 @@ function createWindow() {
 
   win.webContents.on('did-fail-load', () => {
     // Retry after 3s on network failure
-    setTimeout(() => win?.loadURL(`${kBaseURL}/library?companion=windows`, { userAgent: kUA }), 3000)
+    setTimeout(() => win?.loadURL(`${kBaseURL}/discover?companion=windows`, { userAgent: kUA }), 3000)
   })
 
-  // Send current DAW state as soon as the page is interactive
+  // Send current DAW state and kill web chrome as soon as the page is interactive
   win.webContents.on('did-finish-load', () => {
+    injectCompanionCSS()
     win.webContents.send('daw-state', {
       connected: dawState.isConnected,
       bpm: dawState.bpm,
@@ -87,8 +95,13 @@ function createWindow() {
     })
   })
 
+  // Re-inject on SPA navigation (Next.js history.pushState)
+  win.webContents.on('did-navigate-in-page', () => { injectCompanionCSS() })
+
   win.on('close', (e) => {
-    // Minimize to tray on close
+    // If we're doing a real quit (update install or tray Quit), let it through.
+    if (isQuitting) { win = null; return }
+    // Otherwise minimize to tray.
     e.preventDefault()
     win.hide()
   })
@@ -117,7 +130,7 @@ function updateTrayMenu() {
     { type: 'separator' },
     { label: 'Show Library', click: () => { win?.show(); win?.focus() } },
     { type: 'separator' },
-    { label: 'Quit', click: () => { app.exit(0) } }
+    { label: 'Quit', click: () => { isQuitting = true; app.exit(0) } }
   ])
   tray.setContextMenu(menu)
 }
@@ -133,26 +146,122 @@ function registerAutostart() {
   })
 }
 
-// ── Plugin status banner ──────────────────────────────────────────────────────
+// ── Companion CSS injection — kills web chrome, re-injects on SPA navigation ──
 
-function injectPluginStatus(connected, bpm, key) {
+function injectCompanionCSS() {
   if (!win?.webContents) return
-  const label = connected
-    ? `● Plugin connected${bpm > 0 ? '  ·  ' + Math.round(bpm) + ' BPM' : ''}${key ? '  ·  ' + key : ''}`
-    : '○ Plugin not connected'
-  const color  = connected ? '#5ECFDB' : 'rgba(255,255,255,0.25)'
   const js = `
-    (function() {
-      var el = document.getElementById('__wm_plugin_status');
-      if (!el) {
-        el = document.createElement('div');
-        el.id = '__wm_plugin_status';
-        el.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;font-size:10px;font-family:system-ui,sans-serif;padding:3px 12px;text-align:center;pointer-events:none;transition:color .3s;border-bottom:1px solid rgba(26,144,160,0.2);background:rgba(5,10,11,0.85);backdrop-filter:blur(8px);';
-        document.body.appendChild(el);
+    (function(){
+      // Patch React's removeChild/insertBefore to prevent 'parentNode' crash
+      // when third-party scripts (MutationObserver, ads, extensions) remove DOM
+      // nodes that React still holds references to.
+      if(!window.__wmDOMPatched){
+        window.__wmDOMPatched=true;
+        var _rc=Element.prototype.removeChild;
+        Element.prototype.removeChild=function(child){
+          if(child&&child.parentNode!==this) return child;
+          return _rc.call(this,child);
+        };
+        var _ib=Node.prototype.insertBefore;
+        Node.prototype.insertBefore=function(node,child){
+          if(child&&child.parentNode!==this) return node;
+          return _ib.call(this,node,child);
+        };
       }
-      el.style.color = '${color}';
-      el.textContent = '${label}';
-    })()
+      if(!document.getElementById('__wmCSS')){
+        var s=document.createElement('style');
+        s.id='__wmCSS';
+        s.textContent='[data-bottom-nav]{display:none!important;visibility:hidden!important;height:0!important;overflow:hidden!important;pointer-events:none!important;}[data-mobile-spacer]{display:none!important;height:0!important;}#__wm_plugin_status{display:none!important;}';
+        document.head.appendChild(s);
+      }
+      var _kill=function(){
+        ['[data-bottom-nav]','[data-mobile-spacer]'].forEach(function(sel){
+          document.querySelectorAll(sel).forEach(function(el){
+            el.style.setProperty('display','none','important');
+            el.style.setProperty('height','0','important');
+            el.style.setProperty('visibility','hidden','important');
+            el.style.setProperty('overflow','hidden','important');
+            el.style.setProperty('pointer-events','none','important');
+          });
+        });
+      };
+      _kill();
+      if(window.__wmNavInterval) clearInterval(window.__wmNavInterval);
+      window.__wmNavInterval=setInterval(_kill,250);
+      if(window.__wmNavObs) window.__wmNavObs.disconnect();
+      window.__wmNavObs=new MutationObserver(_kill);
+      window.__wmNavObs.observe(document.documentElement,{childList:true,subtree:true});
+    })();
+  `
+  win.webContents.executeJavaScript(js).catch(() => {})
+  injectDragBridge()
+}
+
+// ── Drag bridge injection — fetch interception + mousedown drag detection ──
+
+function injectDragBridge() {
+  if (!win?.webContents) return
+  const js = `
+    (function(){
+      if(window.__wmDragBridgeInjected) return;
+      window.__wmDragBridgeInjected=true;
+
+      // Track which track ID the user last interacted with (play/hover).
+      window.__morphCurrentId='';
+
+      // Intercept fetch to:
+      //  1. detect which track is being played (sets __morphCurrentId)
+      //  2. cache the audio blob so startDrag can fire immediately
+      if(!window.__wmFetchPatched){
+        window.__wmFetchPatched=true;
+        var _fetch=window.fetch;
+        window.fetch=function(){
+          var url=typeof arguments[0]==='string'?arguments[0]:(arguments[0]&&arguments[0].url)||'';
+          var m=url.match(/\\/demo\\/([0-9a-f-]{36})/);
+          if(m){
+            var trackId=m[1];
+            window.__morphCurrentId=trackId;
+            if(window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.morphHover){
+              window.webkit.messageHandlers.morphHover.postMessage(trackId);
+            }
+            // Clone response and cache audio bytes via native bridge.
+            var result=_fetch.apply(this,arguments);
+            result.then(function(resp){
+              resp.clone().arrayBuffer().then(function(buf){
+                if(buf.byteLength>0&&window.__waterNativeDrag){
+                  var bytes=new Uint8Array(buf);
+                  var b64='';
+                  var chunk=8192;
+                  for(var i=0;i<bytes.length;i+=chunk){
+                    b64+=String.fromCharCode.apply(null,bytes.subarray(i,i+chunk));
+                  }
+                  b64=btoa(b64);
+                  var fname=url.split('/').pop()||'track.mp3';
+                  window.__waterNativeDrag.cacheTrack(trackId,b64,fname);
+                }
+              }).catch(function(){});
+            }).catch(function(){});
+            return result;
+          }
+          return _fetch.apply(this,arguments);
+        };
+      }
+
+      // Drag detection: mousedown + move > 8px threshold → trigger native startDrag.
+      var _downX=0,_downY=0,_mouseDown=false;
+      document.addEventListener('mousedown',function(e){ _downX=e.clientX;_downY=e.clientY;_mouseDown=true; });
+      document.addEventListener('mousemove',function(e){
+        if(!_mouseDown) return;
+        var dx=e.clientX-_downX,dy=e.clientY-_downY;
+        if(Math.sqrt(dx*dx+dy*dy)>8){
+          _mouseDown=false;
+          if(window.__morphCurrentId&&window.__waterNativeDrag){
+            window.__waterNativeDrag.startDrag(window.__morphCurrentId);
+          }
+        }
+      });
+      document.addEventListener('mouseup',function(){ _mouseDown=false; });
+    })();
   `
   win.webContents.executeJavaScript(js).catch(() => {})
 }
@@ -241,15 +350,46 @@ function handleLine(conn, line) {
 
 // ── IPC from web app ──────────────────────────────────────────────────────────
 
-ipcMain.on('morphCopy', async (_event, { base64, filename }) => {
+// Track cache: id → absolute local path (populated by fetch interception + morphCopy)
+const trackCache = new Map()
+
+ipcMain.on('morphCopy', (event, { base64, filename, trackId }) => {
   try {
     const tmpFile = path.join(os.tmpdir(), filename)
     fs.writeFileSync(tmpFile, Buffer.from(base64, 'base64'))
-    // Open the temp folder so user can drag the file into the DAW.
-    // Phase 2: native CF_HDROP clipboard integration for direct Ctrl+V paste.
-    shell.showItemInFolder(tmpFile)
+    if (trackId) trackCache.set(trackId, tmpFile)
+    // Try native startDrag — works when called during an active drag gesture.
+    try {
+      event.sender.startDrag({ file: tmpFile, icon: path.join(__dirname, 'assets', 'icon.ico') })
+    } catch (_) {
+      // Not during a drag: show the file so user can drag manually as fallback.
+      shell.showItemInFolder(tmpFile)
+    }
   } catch (err) {
     console.error('[Morph] morphCopy error:', err)
+  }
+})
+
+// Fired from injected JS when user mousedown+moves on a track row.
+ipcMain.on('morphDragStart', (event, { trackId }) => {
+  const filePath = trackId && trackCache.get(trackId)
+  if (filePath && fs.existsSync(filePath)) {
+    try {
+      event.sender.startDrag({ file: filePath, icon: path.join(__dirname, 'assets', 'icon.ico') })
+    } catch (err) {
+      console.error('[Morph] startDrag error:', err)
+    }
+  }
+})
+
+// Cache audio intercepted by injected JS on demo URL fetch responses.
+ipcMain.on('morphCacheTrack', (_event, { trackId, base64, filename }) => {
+  try {
+    const tmpFile = path.join(os.tmpdir(), `wm_${trackId}_${filename}`)
+    fs.writeFileSync(tmpFile, Buffer.from(base64, 'base64'))
+    trackCache.set(trackId, tmpFile)
+  } catch (err) {
+    console.error('[Morph] morphCacheTrack error:', err)
   }
 })
 
@@ -261,9 +401,9 @@ ipcMain.on('morphPlayerState', (_event, state) => {
   tray?.setToolTip(title)
 })
 
-ipcMain.on('morphHover',  (_event, _id)  => { /* no-op on Windows */ })
+ipcMain.on('morphHover',  (_event, _id)  => { /* hover tracked in renderer via injected JS */ })
 ipcMain.on('morphSelect', (_event, _ids) => { /* no-op on Windows */ })
-ipcMain.on('morphInstallUpdate', () => { autoUpdater.quitAndInstall() })
+ipcMain.on('morphInstallUpdate', () => { isQuitting = true; autoUpdater.quitAndInstall() })
 
 // ── Auto-updater ──────────────────────────────────────────────────────────────
 
@@ -340,6 +480,8 @@ function handleProtocolUrl(url) {
   if (win) { win.show(); win.focus() }
 }
 
+app.on('before-quit', () => { isQuitting = true })
+
 app.on('window-all-closed', (e) => {
-  e.preventDefault()  // Keep running in tray
+  if (!isQuitting) e.preventDefault()  // Keep running in tray; let real quits through
 })

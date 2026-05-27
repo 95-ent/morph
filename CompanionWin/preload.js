@@ -34,3 +34,11 @@ contextBridge.exposeInMainWorld('webkit', {
     }
   }
 })
+
+// Native drag bridge: injected JS calls these to trigger OS-level startDrag.
+contextBridge.exposeInMainWorld('__waterNativeDrag', {
+  // Called when user mousedown+moves on a track row (drag intent).
+  startDrag: (trackId) => ipcRenderer.send('morphDragStart', { trackId }),
+  // Called by fetch interceptor when demo audio response is received.
+  cacheTrack: (trackId, base64, filename) => ipcRenderer.send('morphCacheTrack', { trackId, base64, filename })
+})

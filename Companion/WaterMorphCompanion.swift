@@ -628,6 +628,7 @@ final class WMLibraryVC: NSViewController, NSTableViewDataSource, NSTableViewDel
     private var lastAnalyzedAudioPath = ""
 
     private func startLogicAudioWatcher() {
+        checkLogicAudioFile() // immediate first scan — no 2s wait
         logicWatchTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
             self?.checkLogicAudioFile()
         }
@@ -982,12 +983,13 @@ final class WMLibraryVC: NSViewController, NSTableViewDataSource, NSTableViewDel
         let s         = WMSyncState.shared
         let connected = s.isConnected
 
-        syncDot.layer?.backgroundColor = (connected ? kTeal : NSColor(white: 0.22, alpha: 1)).cgColor
-        syncStatusLbl.stringValue = connected ? "" : "NOT CONNECTED"
-        syncStatusLbl.textColor   = NSColor(white: 0.28, alpha: 1)
+        let kWaterTeal = NSColor(red: 0.102, green: 0.565, blue: 0.627, alpha: 1) // #1A90A0
+        syncDot.layer?.backgroundColor = (connected ? kWaterTeal : NSColor(white: 0.22, alpha: 1)).cgColor
+        syncStatusLbl.stringValue = connected ? "Connected to Water Studio" : "NOT CONNECTED"
+        syncStatusLbl.textColor   = connected ? kWaterTeal : NSColor(white: 0.28, alpha: 1)
 
         syncDataLbl.stringValue = connected ? "\(Int(s.bpm)) BPM · \(s.keyLabel)" : ""
-        syncDataLbl.textColor   = isMorphed ? kMauve : kTeal
+        syncDataLbl.textColor   = isMorphed ? kMauve : .white
 
         morphBtn.isEnabled        = connected
         morphBtn.contentTintColor = isMorphed ? kMauve : (connected ? kTeal.withAlphaComponent(0.7) : NSColor(white: 0.25, alpha: 1))
@@ -1660,16 +1662,17 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
     private var navFwdBtn: NSButton!
     private var navTabBtns: [NSButton] = []
     private let kNavTabs: [(label: String, path: String, icon: String)] = [
-        ("Discover",    "/discover",    "binoculars"),
-        ("Library",     "/library",     "house"),
-        ("Favorites",   "/favorites",   "heart"),
-        ("Collections", "/collections", "music.note.list"),
+        ("Library",     "/library",     "house.fill"),
+        ("Favorites",   "/favorites",   "heart.fill"),
+        ("Downloads",   "/library",     "arrow.down.circle.fill"),
     ]
     private var syncDot: NSView!
     private var syncModeLabel: NSTextField!
     private var syncBpmLabel: NSTextField!
     private var syncKeyLabel: NSTextField!
     private var morphBtn: NSButton!
+    private var navTitleLabel: NSTextField!
+    private var activeTabIdx: Int = 0
     private var selBar: NSView!
     private var selBarH: NSLayoutConstraint!
     private var selLabel: NSTextField!
@@ -1714,6 +1717,8 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
         // Must include "WaterMorphCompanion" so CompanionBridge activates
         // window.__waterCompanion in the React app (setLock / clearLock bridge).
         webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) WaterMorphCompanion/1.0"
+        // Allow keyboard input in the non-activating panel: make webView first responder on mouseDown
+        webView.acceptsTouchEvents = true
 
         // Container: [syncBar 40px] [webView fills] [selBar 44px hidden]
         let container = NSView(frame: .zero)
@@ -1736,28 +1741,29 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
         syncModeLabel.textColor = .init(white: 0.3, alpha: 1)
         syncModeLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        // BPM value
+        // BPM value — big and bold
         syncBpmLabel = NSTextField(labelWithString: "—")
-        syncBpmLabel.font = .monospacedSystemFont(ofSize: 13, weight: .bold)
-        syncBpmLabel.textColor = .init(white: 0.25, alpha: 1)
+        syncBpmLabel.font = .monospacedSystemFont(ofSize: 21, weight: .heavy)
+        syncBpmLabel.textColor = .white
         syncBpmLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        // Separator + KEY
-        syncKeyLabel = NSTextField(labelWithString: "—")
-        syncKeyLabel.font = .monospacedSystemFont(ofSize: 13, weight: .bold)
-        syncKeyLabel.textColor = .init(white: 0.25, alpha: 1)
+        // KEY — same size, mauve when morphed
+        syncKeyLabel = NSTextField(labelWithString: "")
+        syncKeyLabel.font = .monospacedSystemFont(ofSize: 21, weight: .heavy)
+        syncKeyLabel.textColor = .init(white: 0.55, alpha: 1)
         syncKeyLabel.translatesAutoresizingMaskIntoConstraints = false
 
         // ── morphBtn — lives in syncBar (reads DAW BPM/key, sends to React) ──
-        morphBtn = NSButton(title: "✦  Morph", target: self, action: #selector(onMorphTapped))
+        morphBtn = NSButton(title: "Click to Morph", target: self, action: #selector(onMorphTapped))
         morphBtn.isBordered = false
         morphBtn.wantsLayer = true
         morphBtn.layer?.cornerRadius = 14
+        morphBtn.layer?.masksToBounds = false
         morphBtn.layer?.backgroundColor = NSColor(white: 0.12, alpha: 1).cgColor
-        morphBtn.layer?.borderColor = kTeal.withAlphaComponent(0.4).cgColor
+        morphBtn.layer?.borderColor = kTeal.withAlphaComponent(0.55).cgColor
         morphBtn.layer?.borderWidth = 1
         morphBtn.contentTintColor = kTeal
-        morphBtn.font = .systemFont(ofSize: 11, weight: .semibold)
+        morphBtn.font = .systemFont(ofSize: 12, weight: .semibold)
         morphBtn.translatesAutoresizingMaskIntoConstraints = false
 
         syncBar.addSubview(syncDot)
@@ -1793,17 +1799,16 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
         navBar.addSubview(navBackBtn)
         navBar.addSubview(navFwdBtn)
 
-        // Tab buttons — icon above label (matches mobile bottom nav)
+        // Tab buttons — icon only (no labels), compact height
         let inactiveCfg = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
         for (idx, tab) in kNavTabs.enumerated() {
             let btn = NSButton(frame: .zero)
             btn.isBordered = false
             btn.wantsLayer = true
-            btn.imagePosition = .imageAbove
+            btn.imagePosition = .imageOnly
             btn.image = NSImage(systemSymbolName: tab.icon, accessibilityDescription: tab.label)?
                 .withSymbolConfiguration(inactiveCfg)
-            btn.title = tab.label
-            btn.font  = .systemFont(ofSize: 9, weight: .medium)
+            btn.title = ""
             btn.contentTintColor = NSColor(white: 0.35, alpha: 1)
             btn.tag    = idx
             btn.target = self; btn.action = #selector(navTabTapped(_:))
@@ -1812,7 +1817,14 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
             navBar.addSubview(btn)
         }
 
-        // Tabs fill the space to the right of the arrows via an equal-width stack
+        // Page title label — between arrows and tabs
+        navTitleLabel = NSTextField(labelWithString: "Library")
+        navTitleLabel.font = .systemFont(ofSize: 12, weight: .semibold)
+        navTitleLabel.textColor = NSColor(white: 0.85, alpha: 1)
+        navTitleLabel.translatesAutoresizingMaskIntoConstraints = false
+        navBar.addSubview(navTitleLabel)
+
+        // Tabs — icon-only, right side
         let tabStack = NSStackView(views: navTabBtns)
         tabStack.orientation  = .horizontal
         tabStack.distribution = .fillEqually
@@ -1838,7 +1850,10 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
             navFwdBtn.widthAnchor.constraint(equalToConstant: 24),
             navFwdBtn.heightAnchor.constraint(equalToConstant: 24),
 
-            tabStack.leadingAnchor.constraint(equalTo: navFwdBtn.trailingAnchor, constant: 4),
+            navTitleLabel.leadingAnchor.constraint(equalTo: navFwdBtn.trailingAnchor, constant: 8),
+            navTitleLabel.centerYAnchor.constraint(equalTo: navBar.centerYAnchor),
+
+            tabStack.leadingAnchor.constraint(equalTo: navTitleLabel.trailingAnchor, constant: 4),
             tabStack.trailingAnchor.constraint(equalTo: navBar.trailingAnchor),
             tabStack.topAnchor.constraint(equalTo: navBar.topAnchor),
             tabStack.bottomAnchor.constraint(equalTo: navBar.bottomAnchor, constant: -1),
@@ -1928,7 +1943,7 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
             syncBar.topAnchor.constraint(equalTo: container.topAnchor),
             syncBar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             syncBar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            syncBar.heightAnchor.constraint(equalToConstant: 40),
+            syncBar.heightAnchor.constraint(equalToConstant: 48),
 
             syncDot.leadingAnchor.constraint(equalTo: syncBar.leadingAnchor, constant: 12),
             syncDot.centerYAnchor.constraint(equalTo: syncBar.centerYAnchor),
@@ -1938,17 +1953,17 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
             syncModeLabel.leadingAnchor.constraint(equalTo: syncDot.trailingAnchor, constant: 6),
             syncModeLabel.centerYAnchor.constraint(equalTo: syncBar.centerYAnchor),
 
-            syncBpmLabel.centerXAnchor.constraint(equalTo: syncBar.centerXAnchor, constant: -18),
+            syncBpmLabel.leadingAnchor.constraint(equalTo: syncModeLabel.trailingAnchor, constant: 10),
             syncBpmLabel.centerYAnchor.constraint(equalTo: syncBar.centerYAnchor),
 
-            syncKeyLabel.leadingAnchor.constraint(equalTo: syncBpmLabel.trailingAnchor, constant: 8),
+            syncKeyLabel.leadingAnchor.constraint(equalTo: syncBpmLabel.trailingAnchor, constant: 6),
             syncKeyLabel.centerYAnchor.constraint(equalTo: syncBar.centerYAnchor),
 
-            // Nav bar (52px — back/fwd + icon+label tabs)
+            // Nav bar (36px — icon-only tabs, compact)
             navBar.topAnchor.constraint(equalTo: syncBar.bottomAnchor),
             navBar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             navBar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            navBar.heightAnchor.constraint(equalToConstant: 52),
+            navBar.heightAnchor.constraint(equalToConstant: 36),
 
             // Web view — fills all space between navBar and selBar
             webView.topAnchor.constraint(equalTo: navBar.bottomAnchor),
@@ -1960,7 +1975,7 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
             morphBtn.trailingAnchor.constraint(equalTo: syncBar.trailingAnchor, constant: -10),
             morphBtn.centerYAnchor.constraint(equalTo: syncBar.centerYAnchor),
             morphBtn.heightAnchor.constraint(equalToConstant: 28),
-            morphBtn.widthAnchor.constraint(equalToConstant: 72),
+            morphBtn.widthAnchor.constraint(equalToConstant: 118),
         ])
 
         // selBar height stored so updateSelectionBar can collapse it to 0 when hidden
@@ -1994,7 +2009,7 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
             feedbackStrip.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             feedbackStrip.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             feedbackStrip.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            feedbackStrip.heightAnchor.constraint(equalToConstant: 26),
+            feedbackStrip.heightAnchor.constraint(equalToConstant: 28),
 
             fbSep.topAnchor.constraint(equalTo: feedbackStrip.topAnchor),
             fbSep.leadingAnchor.constraint(equalTo: feedbackStrip.leadingAnchor),
@@ -2070,37 +2085,47 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
         let s = WMSyncState.shared
         let connected = s.isConnected
 
-        // Connection dot: teal when live, dim when not
-        syncDot.layer?.backgroundColor = (connected ? kTeal : NSColor(white: 0.22, alpha: 1)).cgColor
+        // Connection dot: Water teal when live, dim when not
+        let kWaterTealDot = NSColor(red: 0.102, green: 0.565, blue: 0.627, alpha: 1) // #1A90A0
+        syncDot.layer?.backgroundColor = (connected ? kWaterTealDot : NSColor(white: 0.22, alpha: 1)).cgColor
 
-        // Mode label
-        syncModeLabel.stringValue = connected ? "" : "NOT CONNECTED"
-        syncModeLabel.textColor   = .init(white: 0.28, alpha: 1)
+        // Mode label — short status only
+        let kWaterTeal = NSColor(red: 0.102, green: 0.565, blue: 0.627, alpha: 1)
+        syncModeLabel.stringValue = connected ? "Connected" : "Not connected"
+        syncModeLabel.textColor   = connected ? kWaterTeal : .init(white: 0.28, alpha: 1)
 
-        // BPM — mauve when morphed, teal when connected, dim otherwise
-        syncBpmLabel.stringValue = connected ? "\(Int(s.bpm)) BPM" : "—"
-        syncBpmLabel.textColor   = isMorphed ? kMauve : (connected ? kTeal : .init(white: 0.28, alpha: 1))
+        // BPM — mauve when morphed, WHITE when connected, dim otherwise
+        syncBpmLabel.stringValue = connected ? "\(Int(s.bpm)) BPM" : ""
+        syncBpmLabel.textColor   = isMorphed ? kMauve : (connected ? .white : .init(white: 0.28, alpha: 1))
 
         // KEY — mauve when morphed, white when connected, dim otherwise
-        syncKeyLabel.stringValue = connected ? "· \(s.keyLabel)" : ""
+        syncKeyLabel.stringValue = connected && !s.keyLabel.isEmpty ? "· \(s.keyLabel)" : ""
         syncKeyLabel.textColor   = isMorphed ? kMauve : .init(white: connected ? 0.85 : 0.28, alpha: 1)
 
         // Morph pill button (lives in syncBar)
         if connected && isMorphed {
-            morphBtn.title = "✦  Morphed"
+            morphBtn.title = "✓ Morphed"
+            morphBtn.font = .systemFont(ofSize: 12, weight: .bold)
             morphBtn.contentTintColor = .white
             morphBtn.layer?.backgroundColor = kMauve.cgColor
-            morphBtn.layer?.borderColor = kMauve.cgColor
+            morphBtn.layer?.borderColor = NSColor(red: 0.68, green: 0.55, blue: 1.0, alpha: 1).cgColor
+            morphBtn.layer?.shadowColor = kMauve.cgColor
+            morphBtn.layer?.shadowOpacity = 0.7
+            morphBtn.layer?.shadowRadius = 6
         } else if connected {
-            morphBtn.title = "✦  Morph"
+            morphBtn.title = "Click to Morph"
+            morphBtn.font = .systemFont(ofSize: 12, weight: .semibold)
             morphBtn.contentTintColor = kTeal
-            morphBtn.layer?.backgroundColor = NSColor(white: 0.12, alpha: 1).cgColor
-            morphBtn.layer?.borderColor = kTeal.withAlphaComponent(0.4).cgColor
+            morphBtn.layer?.backgroundColor = kTeal.withAlphaComponent(0.12).cgColor
+            morphBtn.layer?.borderColor = kTeal.withAlphaComponent(0.55).cgColor
+            morphBtn.layer?.shadowOpacity = 0
         } else {
-            morphBtn.title = "✦  Morph"
+            morphBtn.title = "Click to Morph"
+            morphBtn.font = .systemFont(ofSize: 12, weight: .regular)
             morphBtn.contentTintColor = NSColor(white: 0.3, alpha: 1)
             morphBtn.layer?.backgroundColor = NSColor(white: 0.10, alpha: 1).cgColor
             morphBtn.layer?.borderColor = NSColor(white: 0.2, alpha: 1).cgColor
+            morphBtn.layer?.shadowOpacity = 0
         }
         morphBtn.isEnabled = connected
 
@@ -2116,7 +2141,12 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
     @objc private func navForward() { webView.goForward() }
 
     @objc private func navTabTapped(_ sender: NSButton) {
-        let path = kNavTabs[sender.tag].path
+        activeTabIdx = sender.tag
+        let tab = kNavTabs[sender.tag]
+        navTitleLabel?.stringValue = tab.label
+        navTitleLabel?.textColor = NSColor(white: 0.85, alpha: 1)
+        updateNavTabColors()
+        let path = tab.path
         // Client-side navigation: click the hidden Next.js Link so React state
         // (Zustand audio player) is preserved — no full page reload.
         let js = """
@@ -2142,11 +2172,20 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
             ? NSColor(white: 0.75, alpha: 1)
             : NSColor(white: 0.22, alpha: 1)
 
-        guard let path = webView.url?.path else { return }
-        let activeCfg   = NSImage.SymbolConfiguration(pointSize: 17, weight: .semibold)
-        let inactiveCfg = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
+        // Sync activeTabIdx from URL for back/forward navigation
+        // Downloads tab (idx 2) shares path with Library — only update if not explicitly set to 2
+        if let path = webView.url?.path {
+            if path.hasPrefix("/favorites") { activeTabIdx = 1 }
+            else if path.hasPrefix("/library") && activeTabIdx != 2 { activeTabIdx = 0 }
+        }
+        updateNavTabColors()
+    }
+
+    private func updateNavTabColors() {
+        let activeCfg   = NSImage.SymbolConfiguration(pointSize: 19, weight: .semibold)
+        let inactiveCfg = NSImage.SymbolConfiguration(pointSize: 18, weight: .regular)
         for (i, tab) in kNavTabs.enumerated() {
-            let active = path.hasPrefix(tab.path)
+            let active = (i == activeTabIdx)
             let btn = navTabBtns[i]
             btn.contentTintColor = active ? kTeal : NSColor(white: 0.35, alpha: 1)
             btn.font  = .systemFont(ofSize: 9, weight: active ? .semibold : .medium)
@@ -2287,11 +2326,14 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
     // CSS injected at documentStart — hides desktop chrome before first paint.
     private func buildCompanionCSSScript() -> String {
         let css = """
+        /* Hide body until postLoad JS reveals it — prevents nav flash */
+        body { opacity: 0 !important; transition: opacity 0.12s ease !important; }
         #nav-bar { display: none !important; }
-        [data-bottom-nav] { display: none !important; }
+        html body [data-bottom-nav],
+        html body [data-bottom-nav] * { display: none !important; visibility: hidden !important; height: 0 !important; overflow: hidden !important; pointer-events: none !important; }
         [data-genre-picker] { display: none !important; }
         [data-collection-header] { display: none !important; }
-        [data-mobile-spacer] { display: none !important; }
+        html body [data-mobile-spacer] { display: none !important; height: 0 !important; }
         .fixed.inset-0.z-\\[200\\] { display: none !important; }
         .fixed.bottom-24, .fixed.bottom-20 { display: none !important; }
         h1.pl-3 { display: none !important; }
@@ -2301,13 +2343,8 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
         [data-inline-bpm-panel] { display: none !important; }
         .shrink-0[aria-hidden="true"] { display: none !important; }
         [data-pending-overlay] { display: none !important; }
-        /* Tags — plain muted text, no pill (Splice-style) */
-        button.rounded-full { font-size: 9.5px !important; padding: 2px 5px !important; }
-        button.rounded-full:not([style]) { color: rgba(255,255,255,0.28) !important; border-color: transparent !important; background-color: transparent !important; }
-        button.rounded-full[style] { background-color: transparent !important; border-color: transparent !important; font-weight: 600 !important; }
-        /* Filter chips row — scroll from left, slightly bigger pills */
+        /* Filter chips row — scroll from left */
         [data-filter-row] { justify-content: flex-start !important; }
-        [data-filter-row] button { height: 32px !important; font-size: 11.5px !important; padding: 0 12px !important; }
         """
         return """
         (function(){
@@ -2396,7 +2433,7 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
                      "created_at": "2024-01-01T00:00:00Z",
                      "updated_at": "2024-01-01T00:00:00Z"] as [String: Any]
         ]
-        let libraryURL = URL(string: "\(kBaseURL)/library")!
+        let libraryURL = URL(string: "\(kBaseURL)/discover")!
         guard let sessionData = try? JSONSerialization.data(withJSONObject: sessionObj),
               let sessionStr  = String(data: sessionData, encoding: .utf8) else {
             webView.load(URLRequest(url: libraryURL)); return
@@ -2495,6 +2532,9 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
         .shrink-0[aria-hidden="true"] { display: none !important; }
         [data-pending-overlay] { display: none !important; }
 
+        /* ── COMPANION TOP NAV — hidden, native Swift nav takes over ── */
+        .fixed.inset-x-0.top-0.z-50 { display: none !important; }
+
         /* ── GLOBAL BASE ─────────────────────────────────────── */
         html, body, #__next { background: #0d0d0d !important; }
         [data-main-scroll=""] { padding: 0 !important; }
@@ -2525,32 +2565,53 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
         thead tr { display: none !important; }
 
         /* ── TABLE ROWS — Splice density ─────────────────────── */
-        tbody tr { height: 44px !important; min-height: 44px !important; }
+        tbody tr { height: 50px !important; min-height: 50px !important; }
         tbody td { padding-top: 0 !important; padding-bottom: 0 !important; }
+
+        /* ── WAVEFORM COLUMN — hidden in companion ────────────── */
+        [class*="md:table-cell"] { display: none !important; }
 
         /* ── TRACK NAME ──────────────────────────────────────── */
         tbody tr span[class*="truncate"][class*="font-medium"] {
-          font-size: 13px !important; font-weight: 500 !important;
+          font-size: 13.5px !important; font-weight: 600 !important;
         }
+
+        /* ── REVEAL body (after nav is killed) ───────────────── */
+        body { opacity: 1 !important; }
+
+        /* ── HOVER: strong Splice-level feedback ─────────────── */
+        tbody tr:hover { background-color: rgba(255,255,255,0.30) !important; }
+        tbody tr:hover td button { opacity: 1 !important; transform: scale(1.10) !important; }
+        tbody tr:active { background-color: rgba(255,255,255,0.18) !important; }
+
+        /* ── ACTION BUTTONS — 44px hitbox ────────────────────── */
+        tbody td button[title*="Download"],
+        tbody td button[title*="download"],
+        tbody td button[aria-label*="Download"],
+        tbody td button[title*="favorites"],
+        tbody td button[aria-label*="favorites"] {
+          min-width: 36px !important; min-height: 36px !important;
+        }
+
+        /* ── PLAYER BAR: track title bigger ─────────────────── */
+        [data-player-title] { font-size: 14px !important; font-weight: 600 !important; }
+
+        /* ── WEB FEEDBACK BUTTON — hide in companion (native strip handles it) ── */
+        [data-feedback-button], button[aria-label="Send feedback"] { display: none !important; }
         """
-        // JS: inject CSS + three-layer track detection for native drag
-        // Layer 1: fetch interception — catches audio URL before it hits the network
-        // Layer 2: <audio> element play events — reliable fallback
-        // Layer 3: data-loop-id mouseover — activates once web app is deployed
         let js = """
         (function(){
-          if(document.getElementById('__morphStyle')) return;
-          var s=document.createElement('style');
-          s.id='__morphStyle';
-          s.textContent=`\(css)`;
-          document.head.appendChild(s);
+          var notify=function(id){ if(id) window.webkit.messageHandlers.morphHover.postMessage(id); };
 
-          var notify=function(id){
-            if(id) window.webkit.messageHandlers.morphHover.postMessage(id);
-          };
+          // ── CSS: inject once ──────────────────────────────────────────────
+          if(!document.getElementById('__morphStyle')){
+            var s=document.createElement('style');
+            s.id='__morphStyle';
+            s.textContent=`\(css)`;
+            document.head.appendChild(s);
+          }
 
-          // Layer 1: intercept fetch — catches both Supabase Storage URLs
-          // (/demo/{id}.mp3) AND the API proxy (/api/melody/demo/{id}, no .mp3).
+          // ── Fetch patch: once ─────────────────────────────────────────────
           if(!window.__morphFetchPatched){
             window.__morphFetchPatched=true;
             var _fetch=window.fetch;
@@ -2562,111 +2623,134 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
             };
           }
 
-          // Layer 2: watch <audio> play events — same flexible regex
-          var patchAudio=function(){
-            document.querySelectorAll('audio').forEach(function(a){
-              if(a.__morphWatched) return;
-              a.__morphWatched=true;
-              a.addEventListener('play',function(){
-                var m=a.src&&a.src.match(/\\/demo\\/([0-9a-f-]{36})/);
-                if(m) notify(m[1]);
+          // ── Audio watcher: once ──────────────────────────────────────────
+          if(!window.__morphAudioWatching){
+            window.__morphAudioWatching=true;
+            var patchAudio=function(){
+              document.querySelectorAll('audio').forEach(function(a){
+                if(a.__morphWatched) return;
+                a.__morphWatched=true;
+                a.addEventListener('play',function(){
+                  var m=a.src&&a.src.match(/\\/demo\\/([0-9a-f-]{36})/);
+                  if(m) notify(m[1]);
+                });
+              });
+            };
+            setInterval(patchAudio,800);
+            patchAudio();
+          }
+
+          // ── Toast dismiss: once ──────────────────────────────────────────
+          if(!window.__morphToastWatcher){
+            window.__morphToastWatcher=true;
+            var dismissErrToasts=function(){
+              document.querySelectorAll('[data-sonner-toast]').forEach(function(el){
+                if(el.textContent&&(el.textContent.indexOf('418')!==-1||el.textContent.indexOf('notified')!==-1)){
+                  var btn=el.querySelector('[data-close-button]')||el.querySelector('[aria-label*="lose"]');
+                  if(btn) btn.click(); else el.remove();
+                }
+              });
+            };
+            setTimeout(dismissErrToasts,300);
+            setTimeout(dismissErrToasts,800);
+            setTimeout(dismissErrToasts,1500);
+          }
+
+          // ── Interaction handlers: once ───────────────────────────────────
+          if(!window.__morphHandlers){
+            window.__morphHandlers=true;
+            document.addEventListener('mouseover',function(e){
+              var el=e.target;
+              for(var i=0;i<10&&el;i++,el=el.parentElement){
+                if(el.dataset&&el.dataset.loopId){notify(el.dataset.loopId);return;}
+              }
+            },{passive:true});
+            document.addEventListener('mousedown',function(e){
+              var el=e.target;
+              for(var i=0;i<12&&el;i++,el=el.parentElement){
+                if(el.dataset&&el.dataset.loopId){notify(el.dataset.loopId);return;}
+              }
+            },{passive:true});
+            if(!window.__morphSelected){window.__morphSelected=new Set();}
+            document.addEventListener('click',function(e){
+              if(!e.metaKey&&!e.ctrlKey) return;
+              var el=e.target;
+              for(var i=0;i<12&&el;i++,el=el.parentElement){
+                if(el.dataset&&el.dataset.loopId){
+                  var id=el.dataset.loopId;
+                  if(window.__morphSelected.has(id)){
+                    window.__morphSelected.delete(id);
+                    el.style.outline='';
+                  } else {
+                    window.__morphSelected.add(id);
+                    el.style.outline='2px solid rgba(26,144,160,0.8)';
+                    el.style.outlineOffset='-2px';
+                  }
+                  window.webkit.messageHandlers.morphSelect.postMessage([...window.__morphSelected]);
+                  e.preventDefault();e.stopPropagation();
+                  return;
+                }
+              }
+            },true);
+          }
+
+          // ── Volume: once ─────────────────────────────────────────────────
+          if(!window.__morphVolWatcher){
+            window.__morphVolWatcher=true;
+            var showVol=function(){
+              document.querySelectorAll('[class*="w-32"][class*="ml-1"]').forEach(function(el){
+                if(el.className&&el.className.indexOf('hidden')!==-1){
+                  el.style.setProperty('display','flex','important');
+                  el.style.setProperty('min-width','72px','important');
+                  el.style.setProperty('width','72px','important');
+                }
+              });
+            };
+            showVol();
+            new MutationObserver(showVol).observe(document.body,{childList:true,subtree:true});
+          }
+
+          // ── BOTTOM NAV + COMPANION TOP NAV KILL — always runs, no guard ──
+          var _killNav=function(){
+            ['[data-bottom-nav]','[data-mobile-spacer]'].forEach(function(sel){
+              document.querySelectorAll(sel).forEach(function(el){
+                el.style.setProperty('display','none','important');
+                el.style.setProperty('height','0','important');
+                el.style.setProperty('visibility','hidden','important');
+                el.style.setProperty('overflow','hidden','important');
+                el.style.setProperty('pointer-events','none','important');
               });
             });
-          };
-          setInterval(patchAudio,800);
-          patchAudio();
-
-          // Dismiss any Sentry/React error toasts that surface due to hydration
-          // mismatch (companion viewport vs SSR viewport). Auto-dismiss at 300 ms,
-          // 800 ms, and 1.5 s to catch late-appearing toasts.
-          var dismissErrToasts=function(){
-            document.querySelectorAll('[data-sonner-toast]').forEach(function(el){
-              if(el.textContent&&(el.textContent.indexOf('418')!==-1||el.textContent.indexOf('notified')!==-1)){
-                var btn=el.querySelector('[data-close-button]')||el.querySelector('[aria-label*="lose"]');
-                if(btn) btn.click(); else el.remove();
+            document.querySelectorAll('.fixed').forEach(function(el){
+              if(el.classList.contains('inset-x-0')&&el.classList.contains('top-0')&&el.classList.contains('z-50')){
+                el.style.setProperty('display','none','important');
               }
             });
           };
-          setTimeout(dismissErrToasts,300);
-          setTimeout(dismissErrToasts,800);
-          setTimeout(dismissErrToasts,1500);
+          _killNav();
+          if(window.__morphNavInterval) clearInterval(window.__morphNavInterval);
+          window.__morphNavInterval=setInterval(_killNav,250);
+          if(window.__morphNavObs) window.__morphNavObs.disconnect();
+          window.__morphNavObs=new MutationObserver(_killNav);
+          window.__morphNavObs.observe(document.documentElement,{childList:true,subtree:true});
 
-          // Layer 3: data-loop-id mouseover (activates after web deploy of data-loop-id attr)
-          document.addEventListener('mouseover',function(e){
-            var el=e.target;
-            for(var i=0;i<10&&el;i++,el=el.parentElement){
-              if(el.dataset&&el.dataset.loopId){notify(el.dataset.loopId);return;}
-            }
-          },{passive:true});
-
-          // Layer 4: mousedown on any row — fires before play, giving us the ID
-          // the moment the user presses down (works alongside data-loop-id).
-          document.addEventListener('mousedown',function(e){
-            var el=e.target;
-            for(var i=0;i<12&&el;i++,el=el.parentElement){
-              if(el.dataset&&el.dataset.loopId){notify(el.dataset.loopId);return;}
-            }
-          },{passive:true});
-
-          // Multi-select: Cmd+click adds track to selection set
-          if(!window.__morphSelected){window.__morphSelected=new Set();}
-          document.addEventListener('click',function(e){
-            if(!e.metaKey&&!e.ctrlKey) return;
-            var el=e.target;
-            for(var i=0;i<12&&el;i++,el=el.parentElement){
-              if(el.dataset&&el.dataset.loopId){
-                var id=el.dataset.loopId;
-                if(window.__morphSelected.has(id)){
-                  window.__morphSelected.delete(id);
-                  el.style.outline='';
-                } else {
-                  window.__morphSelected.add(id);
-                  el.style.outline='2px solid rgba(26,144,160,0.8)';
-                  el.style.outlineOffset='-2px';
-                }
-                window.webkit.messageHandlers.morphSelect.postMessage([...window.__morphSelected]);
-                e.preventDefault();e.stopPropagation();
-                return;
-              }
-            }
-          },true);
-
-          // MutationObserver: watch for the player bar to appear and force-show
-          // the volume control (Tailwind hides it on mobile viewports).
-          var showVol=function(){
-            document.querySelectorAll('[class*="w-32"][class*="ml-1"]').forEach(function(el){
-              if(el.className&&el.className.indexOf('hidden')!==-1){
-                el.style.setProperty('display','flex','important');
-                el.style.setProperty('min-width','72px','important');
-                el.style.setProperty('width','72px','important');
-              }
-            });
-          };
-          showVol();
-          var obs=new MutationObserver(showVol);
-          obs.observe(document.body,{childList:true,subtree:true});
-
-          // Hide companion artifacts that may render asynchronously
+          // ── Artifact hide: runs each call ────────────────────────────────
           var _hideArt=function(){
-            // Genre picker overlay: fixed inset-0 z-[200]
             document.querySelectorAll('.fixed.inset-0').forEach(function(el){
               if(el.className.indexOf('z-[200]')!==-1){
                 el.style.setProperty('display','none','important');
               }
             });
-            // Mobile spacer: aria-hidden div with 72px height
             document.querySelectorAll('[aria-hidden="true"]').forEach(function(el){
               if(el.style.height&&el.style.height.indexOf('72px')!==-1){
                 el.style.setProperty('display','none','important');
               }
             });
-            // Loading overlay: absolute inset-0 z-10 dark background
             document.querySelectorAll('.absolute.inset-0').forEach(function(el){
               if(el.className.indexOf('z-10')!==-1&&el.className.indexOf('bg-background')!==-1){
                 el.style.setProperty('display','none','important');
               }
             });
-            // BPM·key sub-labels below track names (pre-deploy; replaced by tags after deploy)
             document.querySelectorAll('tbody td p').forEach(function(el){
               if(el.textContent.indexOf('bpm')!==-1){
                 el.style.setProperty('display','none','important');
@@ -2674,7 +2758,9 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
             });
           };
           _hideArt();
-          new MutationObserver(_hideArt).observe(document.body,{childList:true,subtree:true});
+          if(window.__morphArtObs) window.__morphArtObs.disconnect();
+          window.__morphArtObs=new MutationObserver(_hideArt);
+          window.__morphArtObs.observe(document.body,{childList:true,subtree:true});
         })();
         """
         webView.evaluateJavaScript(js, completionHandler: nil)
@@ -2863,12 +2949,8 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
         let track: WMTrack = trackMap[id] ??
             WMTrack(id: id, name: id, key: "", tags: "", bpm: 0, duration: 0, demoHash: "")
 
-        // Only drag when file is already downloaded — trigger prefetch for next time if not.
-        guard FileManager.default.fileExists(atPath: track.cachedFile.path) else {
-            prefetchIfNeeded(id)
-            return
-        }
-        prefetchIfNeeded(id)  // no-op if already cached
+        // Always start drag — lazy providers download on demand if file not cached yet.
+        prefetchIfNeeded(id)
 
         let sync = WMSyncState.shared
         let canMorph = sync.isConnected
@@ -2934,7 +3016,7 @@ final class WMWindowController: NSWindowController {
 
     convenience init() {
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 380, height: 720),
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 720),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -2944,31 +3026,36 @@ final class WMWindowController: NSWindowController {
         panel.hidesOnDeactivate           = false
         panel.isMovableByWindowBackground = true
         panel.backgroundColor             = kBG
-        // Fixed width — vertical-only resize like Splice
-        panel.contentMinSize = NSSize(width: 380, height: 400)
-        panel.contentMaxSize = NSSize(width: 380, height: 9999)
-        panel.collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace]
+        // Professional resize range: Splice-spec 375–420pt wide, full height
+        panel.contentMinSize = NSSize(width: 375, height: 500)
+        panel.contentMaxSize = NSSize(width: 420, height: 9999)
+        panel.collectionBehavior = [.fullScreenAuxiliary, .canJoinAllSpaces]
         panel.isRestorable = false  // don't restore saved (possibly huge) window size
         self.init(window: panel)
 
         // Always open full height of the visible screen, right-aligned.
-        // User can resize; their preferred height is saved and restored next launch.
+        // User can resize within professional bounds; saved frame restored if valid.
+        let kDefaultW: CGFloat = 400
         let savedKey = "WaterMorphPanelFrame"
         if let screen = NSScreen.main {
             let f = screen.visibleFrame
+            var w = kDefaultW
             var h = f.height
-            var x = f.maxX - 400
+            var x = f.maxX - kDefaultW - 16
             var y = f.minY
-            // If user previously resized, honour their height + position.
+            // Only restore if the saved width is within the valid Splice-spec range.
             if let saved = UserDefaults.standard.string(forKey: savedKey) {
                 let r = NSRectFromString(saved)
-                h = max(400, min(r.size.height, f.height))
-                x = min(max(r.origin.x, f.minX), f.maxX - 380)
-                y = min(max(r.origin.y, f.minY), f.maxY - h)
+                if r.size.width >= 375 && r.size.width <= 420 {
+                    w = r.size.width
+                    h = max(500, min(r.size.height, f.height))
+                    x = min(max(r.origin.x, f.minX), f.maxX - w)
+                    y = min(max(r.origin.y, f.minY), f.maxY - h)
+                }
             }
-            panel.setFrame(NSRect(x: x, y: y, width: 380, height: h), display: false)
+            panel.setFrame(NSRect(x: x, y: y, width: w, height: h), display: false)
         } else {
-            panel.setContentSize(NSSize(width: 380, height: 720))
+            panel.setContentSize(NSSize(width: kDefaultW, height: 720))
         }
 
         // Persist frame on every move/resize
@@ -2984,22 +3071,24 @@ final class WMWindowController: NSWindowController {
         UserDefaults.standard.removeObject(forKey: "WaterMorphPanelFrame")
         WMTokenStore.shared.load()
         WMTokenStore.shared.isLoggedIn ? showLibrary() : showLogin()
-        // Force full-height frame on every launch — ignore any stale saved size.
+        // Force 400pt width on every cold launch — ignore any stale saved frames.
         if let panel = window, let screen = NSScreen.main {
             let f = screen.visibleFrame
-            panel.setFrame(NSRect(x: f.maxX - 400, y: f.minY, width: 380, height: f.height), display: false)
+            panel.setFrame(NSRect(x: f.maxX - 416, y: f.minY, width: 400, height: f.height), display: false)
         }
         showWindow(nil)
-        snapToFullSize()
+        snapToScreen()
     }
 
-    // Clamp position to screen and enforce 380px width. Height is user-controlled.
-    func snapToFullSize() {
-        guard let panel = window, let screen = NSScreen.main else { return }
+    // Clamp position so the window stays fully on its current screen.
+    func snapToScreen() {
+        guard let panel = window else { return }
+        let screen = panel.screen ?? NSScreen.main
+        guard let screen = screen else { return }
         let f = screen.visibleFrame
         var frame = panel.frame
-        frame.size.width = 380
-        frame.origin.x = min(max(frame.origin.x, f.minX), f.maxX - 380)
+        frame.size.width = min(max(frame.size.width, 375), 420)
+        frame.origin.x = min(max(frame.origin.x, f.minX), f.maxX - frame.size.width)
         frame.origin.y = min(max(frame.origin.y, f.minY), f.maxY - frame.size.height)
         panel.setFrame(frame, display: true)
     }
@@ -3079,7 +3168,7 @@ final class WMMenuBar: NSObject {
         guard let w = wc.window else { return }
         if w.isVisible { w.orderOut(nil) } else {
             wc.showWindow(nil)
-            wc.snapToFullSize()
+            wc.snapToScreen()
         }
     }
 }
@@ -3171,7 +3260,7 @@ final class WMAppDelegate: NSObject, NSApplicationDelegate {
         // watermorph://launch — snap to full size, surface and focus
         DispatchQueue.main.async { [weak self] in
             self?.wc?.showWindow(nil)
-            self?.wc?.snapToFullSize()   // after show so frame sticks
+            self?.wc?.snapToScreen()   // after show so frame sticks
             NSApp.activate(ignoringOtherApps: true)
         }
     }
@@ -3198,6 +3287,7 @@ final class WMAppDelegate: NSObject, NSApplicationDelegate {
     private var lastAnalyzedAudioPath = ""
 
     private func startLogicAudioWatcher() {
+        checkLogicAudioFile() // immediate first scan — no 2s wait
         logicWatchTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
             self?.checkLogicAudioFile()
         }
