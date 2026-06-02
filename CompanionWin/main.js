@@ -10,7 +10,7 @@ const os   = require('os')
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const kPort    = 59812
-const kBaseURL = 'https://water.95ent.ai'
+const kBaseURL = 'https://water.grauxmusic.com'
 const kUA      = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) WaterMorphCompanion/1.0'
 
 // ── Single-instance guard ────────────────────────────────────────────────────
@@ -36,12 +36,15 @@ function createWindow() {
   // custom chrome, which keeps a native draggable area but lets us color it.
   const isMac = process.platform === 'darwin'
   win = new BrowserWindow({
-    width:           420,
-    height:          700,
-    minWidth:        340,
-    minHeight:       480,
+    width:           400,
+    height:          800,
+    minWidth:        400,
+    maxWidth:        400,
+    minHeight:       400,
+    show:            false,
     frame:           true,
-    titleBarStyle:   isMac ? 'hidden' : 'hiddenInset',
+    titleBarStyle:   isMac ? 'hiddenInset' : 'hiddenInset',
+    trafficLightPosition: isMac ? { x: 12, y: 10 } : undefined,
     titleBarOverlay: isMac ? false : {
       color:       '#0a0a0a',
       symbolColor: '#8B5CF6',   // mauve — Water brand
@@ -63,11 +66,10 @@ function createWindow() {
   // and the web app renders the full browser UI instead of the companion UI.
   win.webContents.session.setUserAgent(kUA)
 
-  // Clear service worker + cache on every launch so stale Next.js HTML never
-  // causes React hydration mismatch (#418) between cached server HTML and new JS.
-  win.webContents.session.clearStorageData({
-    storages: ['serviceworkers', 'cachestorage']
-  }).catch(() => {}).finally(() => {
+  // Clear only serviceworkers — lets the HTTP cache speed up loads.
+  // HTTP cache cleared = blank flash on every launch (do not add clearCache() here).
+  win.webContents.session.clearStorageData({ storages: ['serviceworkers'] })
+    .catch(() => {}).finally(() => {
     win.loadURL(`${kBaseURL}/discover?companion=windows`, {
       userAgent: kUA,
       extraHeaders: 'X-Water-Companion: windows\n'
@@ -85,8 +87,9 @@ function createWindow() {
     setTimeout(() => win?.loadURL(`${kBaseURL}/discover?companion=windows`, { userAgent: kUA }), 3000)
   })
 
-  // Send current DAW state and kill web chrome as soon as the page is interactive
+  // Show window only after page is ready — eliminates the blank flash on open
   win.webContents.on('did-finish-load', () => {
+    win.show()
     injectCompanionCSS()
     win.webContents.send('daw-state', {
       connected: dawState.isConnected,
@@ -97,6 +100,26 @@ function createWindow() {
 
   // Re-inject on SPA navigation (Next.js history.pushState)
   win.webContents.on('did-navigate-in-page', () => { injectCompanionCSS() })
+
+  // Splice rule: plans/billing/auth always open in the external browser.
+  // The companion stays on /discover — it never becomes a checkout page.
+  const EXTERNAL_PATHS = ['/plans', '/billing', '/auth', '/start', '/legal', '/settings']
+  win.webContents.on('will-navigate', (event, url) => {
+    try {
+      const path = new URL(url).pathname
+      if (EXTERNAL_PATHS.some(p => path.startsWith(p))) {
+        event.preventDefault()
+        shell.openExternal(url)
+      }
+    } catch {}
+  })
+
+  // Auto-save downloads to WATER_TMP — prevents macOS "Save As" dialog
+  win.webContents.session.on('will-download', (_event, item) => {
+    const filename = item.getFilename()
+    const savePath = path.join(WATER_TMP, filename)
+    item.setSavePath(savePath)
+  })
 
   win.on('close', (e) => {
     // If we're doing a real quit (update install or tray Quit), let it through.
@@ -113,7 +136,7 @@ function createTray() {
   // Use a 16x16 transparent icon — replace icon.ico with a real icon in production
   const icon = nativeImage.createEmpty()
   tray = new Tray(icon)
-  tray.setToolTip('Water Morph')
+  tray.setToolTip('Water Studio')
   updateTrayMenu()
   tray.on('click', () => {
     if (win?.isVisible()) { win.focus() } else { win?.show() }
@@ -148,6 +171,15 @@ function registerAutostart() {
 
 // ── Companion CSS injection — kills web chrome, re-injects on SPA navigation ──
 
+function injectPluginStatus(connected, bpm, key) {
+  if (!win?.webContents) return
+  const script = `(function(){
+    const el = document.getElementById('__wm_plugin_status');
+    if (el) { el.dataset.connected = ${JSON.stringify(String(connected))}; el.dataset.bpm = ${JSON.stringify(String(bpm))}; el.dataset.key = ${JSON.stringify(String(key))}; }
+  })()`
+  win.webContents.executeJavaScript(script).catch(() => {})
+}
+
 function injectCompanionCSS() {
   if (!win?.webContents) return
   const js = `
@@ -171,7 +203,7 @@ function injectCompanionCSS() {
       if(!document.getElementById('__wmCSS')){
         var s=document.createElement('style');
         s.id='__wmCSS';
-        s.textContent='[data-bottom-nav]{display:none!important;visibility:hidden!important;height:0!important;overflow:hidden!important;pointer-events:none!important;}[data-mobile-spacer]{display:none!important;height:0!important;}#__wm_plugin_status{display:none!important;}';
+        s.textContent='[data-bottom-nav]{display:none!important;visibility:hidden!important;height:0!important;overflow:hidden!important;pointer-events:none!important;}[data-mobile-spacer]{display:none!important;height:0!important;}#__wm_plugin_status{display:none!important;}[data-companion-header]{-webkit-app-region:drag}[data-companion-header] button,[data-companion-header] input,[data-companion-header] a{-webkit-app-region:no-drag}[data-sidebar="sidebar"]{display:none!important;}[data-sidebar="rail"]{display:none!important;}';
         document.head.appendChild(s);
       }
       var _kill=function(){
@@ -350,6 +382,11 @@ function handleLine(conn, line) {
 
 // ── IPC from web app ──────────────────────────────────────────────────────────
 
+// Dedicated temp dir — never rely on os.tmpdir() which inherits TMPDIR from the
+// launching shell (e.g. Claude Code sets TMPDIR to its session folder).
+const WATER_TMP = path.join(os.homedir(), 'Library', 'Caches', 'water-studio', 'downloads')
+fs.mkdirSync(WATER_TMP, { recursive: true })
+
 // Track cache: id → absolute local path (populated by fetch interception + morphCopy)
 const trackCache = new Map()
 
@@ -457,6 +494,12 @@ function setupAutoUpdater() {
 // ── App lifecycle ─────────────────────────────────────────────────────────────
 
 app.whenReady().then(() => {
+  if (app.dock) app.dock.hide()
+  // Standard Edit menu so Cmd+C/V/X/A work in the WebView
+  Menu.setApplicationMenu(Menu.buildFromTemplate([
+    { role: 'appMenu' },
+    { role: 'editMenu' },
+  ]))
   createWindow()
   createTray()
   startTCPServer()
@@ -478,6 +521,21 @@ app.on('open-url', (_event, url) => {
 function handleProtocolUrl(url) {
   if (!url.startsWith('watermorph://')) return
   if (win) { win.show(); win.focus() }
+
+  const parsed = new URL(url)
+
+  // watermorph://auth?access_token=X&refresh_token=Y
+  // Navigates the WebView to a URL with the Supabase auth fragment.
+  // The Supabase client on that page auto-picks up the tokens and
+  // creates the session — same mechanism as email magic links.
+  if (parsed.hostname === 'auth') {
+    const at = parsed.searchParams.get('access_token')
+    const rt = parsed.searchParams.get('refresh_token')
+    if (at && rt && win?.webContents) {
+      const authUrl = `${kBaseURL}/api/plugin/v1/auth-callback?access_token=${encodeURIComponent(at)}&refresh_token=${encodeURIComponent(rt)}`
+      win.webContents.loadURL(authUrl, { userAgent: kUA, extraHeaders: 'X-Water-Companion: windows\n' })
+    }
+  }
 }
 
 app.on('before-quit', () => { isQuitting = true })

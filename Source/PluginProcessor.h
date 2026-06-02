@@ -13,7 +13,8 @@
 // Background    : WaterAPI calls (spawned internally).
 //==============================================================================
 class MorphAudioProcessor  : public juce::AudioProcessor,
-                             private juce::Timer
+                             private juce::Timer,
+                             private juce::ChangeListener
 {
 public:
     //==========================================================================
@@ -209,6 +210,13 @@ private:
     // the display updates when the user changes tempo without playing audio.
     void timerCallback() override;
 
+    // juce::ChangeListener — fires when the audio device list / default output
+    // changes (headphones plugged/unplugged, Bluetooth connect, default flip).
+    // We re-point the standalone preview device at the new default output so
+    // audio follows the headphones instead of getting stuck on the speakers.
+    void changeListenerCallback (juce::ChangeBroadcaster* source) override;
+    void reopenStandaloneOnDefaultDevice();
+
     //==========================================================================
     // Persistent settings
     //==========================================================================
@@ -229,6 +237,8 @@ private:
     std::atomic<bool>             loggedIn         { false };
     std::atomic<bool>             oauthPollActive  { false };
     std::atomic<double>           hostBPM          { 120.0 };
+    std::atomic<int>              hostTimeSigNum   { 4 };   // project time signature numerator
+    std::atomic<int>              hostTimeSigDen   { 4 };   // project time signature denominator
     std::atomic<bool>             previewActive    { false };
     std::atomic<bool>             pendingPreviewStart { false };
     std::atomic<double>           previewSourceBPM { 120.0 };

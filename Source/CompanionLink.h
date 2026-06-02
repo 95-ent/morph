@@ -29,18 +29,15 @@ public:
     void ensureRunning();
 
     //==========================================================================
-    // Ask the companion to drag filePath to wherever the user drops it.
-    // Returns true if the command was sent successfully.
-    //==========================================================================
-    bool requestDrag (const juce::String& filePath);
-
-    //==========================================================================
     // Broadcast DAW sync state (BPM, key, mode, timeSecs) to the companion.
     // timeSecs = ppqPosition / bpm * 60 — current playhead position in seconds.
     // Fire-and-forget — no ack expected. Safe to call from the message thread.
     //==========================================================================
+    // tsNum / tsDen = project time signature (e.g. 4/4) — lets the companion
+    // bar-align morph exports to the DAW grid. Appended after the existing
+    // positional fields so older companions ignore them harmlessly.
     void sendSync (double bpm, const juce::String& key, const juce::String& mode,
-                   double timeSecs = 0.0);
+                   double timeSecs = 0.0, int tsNum = 4, int tsDen = 4);
 
     //==========================================================================
     // Notify the companion of a transport play/stop event with the current
@@ -67,7 +64,7 @@ private:
     // so we cap retries to once every kReconnectThrottleMs to avoid UI freeze.
     int64_t lastConnectAttemptMs_ { 0 };
     static constexpr int kConnectTimeoutMs    =  200;   // was 3000 — prevents UI freeze
-    static constexpr int kReconnectThrottleMs = 5000;   // retry at most every 5 s
+    static constexpr int kReconnectThrottleMs = 1000;   // retry at most every 1 s
 
     bool tryConnect();
     void disconnect();

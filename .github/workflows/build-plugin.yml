@@ -17,8 +17,12 @@ permissions:
 
 jobs:
   # ── Mac (AU + VST3, Universal) ─────────────────────────────────────────────
+  # macos-13 runners frequently never get allocated and time out at 24h, which
+  # cancels the whole run and visually masks the Windows jobs that DID succeed.
+  # macos-14 (Apple silicon) is allocated reliably and still cross-builds the
+  # universal binary via CMAKE_OSX_ARCHITECTURES below.
   build-mac:
-    runs-on: macos-13
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
 
@@ -155,9 +159,21 @@ jobs:
 
   # ── Windows (VST3, x64) ────────────────────────────────────────────────────
   build-windows:
-    runs-on: windows-2022
+    runs-on: windows-latest
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Resolve version (single source of truth = CMakeLists.txt)
+        id: ver
+        shell: bash
+        run: |
+          VER=$(grep -Eo 'project\(Morph VERSION [0-9]+\.[0-9]+\.[0-9]+' CMakeLists.txt | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+')
+          if [ -z "$VER" ]; then echo "Could not parse version from CMakeLists.txt"; exit 1; fi
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "Resolved version: $VER"
 
       - name: Clone JUCE
         run: git clone --depth=1 --branch=8.0.12 https://github.com/juce-framework/JUCE.git ../JUCE
@@ -196,7 +212,8 @@ jobs:
 
   # ── Windows installer (VST3 + Electron companion, bundled) ────────────────
   build-installer-win:
-    runs-on: windows-2022
+    runs-on: windows-latest
+    timeout-minutes: 20
     needs: build-windows
     defaults:
       run:
@@ -222,11 +239,20 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
+      # win.artifactName in package.json is the unversioned Water_Morph_Windows.exe.
+      # Copy it to a versioned filename so every build is traceable.
+      - name: Version the installer filename
+        shell: bash
+        run: |
+          VER="${{ needs.build-windows.outputs.version }}"
+          cp "dist/Water_Morph_Windows.exe" "dist/Water_Morph_${VER}_Windows.exe"
+          ls -la dist/*.exe
+
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
         with:
-          name: Water_Morph_1.0.0_Windows
-          path: CompanionWin/dist/*.exe
+          name: Water_Morph_${{ needs.build-windows.outputs.version }}_Windows
+          path: CompanionWin/dist/Water_Morph_${{ needs.build-windows.outputs.version }}_Windows.exe
           retention-days: 14
 
       - name: Publish Windows to GitHub Release
@@ -236,4 +262,4 @@ jobs:
           name: "Water Morph — Latest Build"
           prerelease: true
           make_latest: true
-          files: CompanionWin/dist/*.exe
+          files: CompanionWin/dist/Water_Morph_${{ needs.build-windows.outputs.version }}_Windows.exe

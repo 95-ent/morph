@@ -74,29 +74,10 @@ void CompanionLink::ensureRunning()
 }
 
 //==============================================================================
-bool CompanionLink::requestDrag (const juce::String& filePath)
-{
-    if (! isConnected()) tryConnect();
-    if (! isConnected()) return false;
-
-    const juce::String cmd = "DRAG " + filePath + "\n";
-    if (socket->write (cmd.toRawUTF8(), (int) cmd.getNumBytesAsUTF8()) <= 0)
-    {
-        disconnect();
-        return false;
-    }
-
-    if (socket->waitUntilReady (true, kConnectTimeoutMs) != 1)
-        return false;
-
-    char ack[16] = {};
-    socket->read (ack, sizeof (ack) - 1, false);
-    return juce::String (ack).trim() == "OK";
-}
-
 //==============================================================================
 void CompanionLink::sendSync (double bpm, const juce::String& key,
-                               const juce::String& mode, double timeSecs)
+                               const juce::String& mode, double timeSecs,
+                               int tsNum, int tsDen)
 {
     if (! isConnected()) tryConnect();
     if (! isConnected()) return;
@@ -104,7 +85,9 @@ void CompanionLink::sendSync (double bpm, const juce::String& key,
     const juce::String msg = "SYNC " + juce::String (bpm, 2)
                            + " " + (key.isEmpty() ? "?" : key)
                            + " " + mode
-                           + " " + juce::String (timeSecs, 3) + "\n";
+                           + " " + juce::String (timeSecs, 3)
+                           + " " + juce::String (tsNum)
+                           + " " + juce::String (tsDen) + "\n";
     if (socket->write (msg.toRawUTF8(), (int) msg.getNumBytesAsUTF8()) <= 0)
         disconnect();
 }

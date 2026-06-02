@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(Morph VERSION 1.0.7)
+project(Morph VERSION 1.0.8)
 
 # JUCE_PATH can be overridden via -DJUCE_PATH=... on the command line
 if(NOT DEFINED JUCE_PATH)

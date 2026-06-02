@@ -192,6 +192,14 @@ LocalDetectResult localDetectBpmAndKey (const float* mono,
     int    chordHist[24]   = {};   // how many frames each chord was detected
     double chromaTotal[12] = {};   // accumulated chroma for K-S fallback
 
+    // Monophonic detection: count how many distinct pitch classes are
+    // simultaneously active per tonal frame. A cappella / single-line vocal
+    // averages ~1 active PC; full harmony averages 3+. We use this to decide
+    // whether to trust chord-template matching (polyphonic) or lean on the
+    // mode-aware K-S correlation (monophonic) where chord matching is unreliable.
+    double activePCsSum   = 0.0;   // sum of active-PC counts across tonal frames
+    int    tonalFrameCnt  = 0;
+
     for (int frame = 0; frame < numFrames; ++frame)
     {
         if (onsetEnv[frame] > fluxThr) continue;   // skip percussive frame
@@ -205,11 +213,25 @@ LocalDetectResult localDetectBpmAndKey (const float* mono,
         norm = std::sqrt (norm);
 
         float cn[12];
+        float framePeak = 0.0f;
         for (int i = 0; i < 12; ++i)
         {
             cn[i] = float (ch[i] / norm);
             chromaTotal[i] += ch[i];
+            framePeak = juce::jmax (framePeak, cn[i]);
         }
+
+        // Count pitch classes carrying *strong* energy (>= 60% of the frame peak).
+        // A single pitched note — even with its harmonic series — concentrates
+        // strong energy in 1-2 pitch classes; a sustained triad lights up 3.
+        // 60% (vs a looser 35%) keeps harmonic leakage from a monophonic vocal
+        // from being mistaken for chord notes.
+        int strongPCs = 0;
+        const float pcThr = framePeak * 0.60f;
+        for (int i = 0; i < 12; ++i)
+            if (cn[i] >= pcThr) ++strongPCs;
+        activePCsSum += strongPCs;
+        ++tonalFrameCnt;
 
         // Cosine similarity with 24 chord templates (templates already unit-norm)
         float bestSim = 0.0f;
@@ -220,10 +242,21 @@ LocalDetectResult localDetectBpmAndKey (const float* mono,
             for (int i = 0; i < 12; ++i) sim += cn[i] * tmpl[c][i];
             if (sim > bestSim) { bestSim = sim; bestC = c; }
         }
-        // Threshold > flat-chroma baseline (~0.50) to require real harmonic structure
-        if (bestC >= 0 && bestSim > 0.55f)
+        // A single pitch class scores cos≈0.577 against any triad containing it,
+        // so 0.55 let monophonic notes masquerade as chords (root-confusion that
+        // mislabelled B-minor vocals as A/D major). Require a genuine triad:
+        // at least three strong pitch classes AND a higher cosine floor.
+        if (bestC >= 0 && bestSim > 0.72f && strongPCs >= 3)
             chordHist[bestC]++;
     }
+
+    const double avgActivePCs = (tonalFrameCnt > 0)
+                              ? activePCsSum / (double) tonalFrameCnt
+                              : 0.0;
+    // Monophonic when the average strong-PC count per tonal frame is low
+    // (single sung line / solo instrument). Threshold 2.0 separates a melody
+    // line from sustained chords / pads.
+    const bool isMonophonic = (avgActivePCs > 0.0 && avgActivePCs < 2.0);
 
     //==========================================================================
     // Pass 4 — key scoring: chord-key compatibility (primary) + K-S (fallback)
@@ -233,14 +266,19 @@ LocalDetectResult localDetectBpmAndKey (const float* mono,
 
     float keyScore[24] = {};
 
-    // Primary: sum chord votes × compatibility weight
-    if (totalChordVotes > 0)
+    // Primary: sum chord votes × compatibility weight.
+    // Skip entirely for monophonic material — chord votes there are root-confusion
+    // noise (single notes mis-read as chords) and actively pull toward the wrong
+    // key (e.g. a B-minor vocal's F#/A/D notes vote A-major).
+    if (totalChordVotes > 0 && !isMonophonic)
         for (int k = 0; k < 24; ++k)
             for (int c = 0; c < 24; ++c)
                 keyScore[k] += float (chordHist[c]) * chordKeyCompat (c, k);
 
-    // Secondary: K-S Pearson correlation on accumulated chroma
-    // Weighted so chord votes dominate when abundant; K-S leads when chords sparse
+    // Secondary: K-S Pearson correlation on accumulated chroma.
+    // For polyphonic material chord votes dominate; for monophonic material the
+    // mode-aware K-S profiles are the authoritative signal, so we scale K-S up to
+    // overwhelm any residual chord noise.
     {
         float chromaF[12];
         double sum = 0;
@@ -248,15 +286,38 @@ LocalDetectResult localDetectBpmAndKey (const float* mono,
         for (int i = 0; i < 12; ++i)
             chromaF[i] = (sum > 0) ? float (chromaTotal[i] / sum) : 0.0f;
 
-        // Scale: chord score can reach totalChordVotes*5; keep K-S influence small
-        float ksW = (totalChordVotes > 10) ? float (totalChordVotes) * 0.05f : 5.0f;
+        // Polyphonic: keep K-S as a light tiebreaker behind chord votes.
+        // Monophonic: K-S is primary — use a large fixed weight so the chord-vote
+        // path (which we already zeroed above) can never dominate.
+        float ksW = isMonophonic
+                  ? 100.0f
+                  : ((totalChordVotes > 10) ? float (totalChordVotes) * 0.05f : 5.0f);
 
         for (int root = 0; root < 12; ++root)
         {
             float rot[12];
             for (int i = 0; i < 12; ++i) rot[i] = chromaF[(i + root) % 12];
-            keyScore[root]      += pearsonCorr (rot, kMaj, 12) * ksW;
-            keyScore[root + 12] += pearsonCorr (rot, kMin, 12) * ksW;
+
+            float majCorr = pearsonCorr (rot, kMaj, 12);
+            float minCorr = pearsonCorr (rot, kMin, 12);
+            keyScore[root]      += majCorr * ksW;
+            keyScore[root + 12] += minCorr * ksW;
+
+            // Tonic + dominant emphasis (mode-independent): a melody spends most
+            // of its energy on the tonic (scale degree 1) and dominant (degree 5).
+            // rot[0] is the candidate tonic's pitch-class energy, rot[7] the
+            // dominant. This locks the *root*, resolving tonic/relative ambiguity
+            // that pure profile-correlation leaves flat.
+            const float tonicBonus = (rot[0] * 2.0f + rot[7]) * ksW * 0.5f;
+            keyScore[root]      += tonicBonus;
+            keyScore[root + 12] += tonicBonus;
+
+            // Third discrimination (mode): the major third (degree 3, rot[4])
+            // favours the major key on this root; the minor third (rot[3])
+            // favours the minor key. This is what separates Bmaj from Bmin once
+            // the root is locked — the single most common monophonic error.
+            keyScore[root]      += (rot[4] - rot[3]) * ksW;
+            keyScore[root + 12] += (rot[3] - rot[4]) * ksW;
         }
     }
 

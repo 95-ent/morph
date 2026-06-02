@@ -24,7 +24,7 @@ struct TrackInfo
 class WaterAPI
 {
 public:
-    static constexpr const char* kBaseURL     = "https://water.95ent.ai";
+    static constexpr const char* kBaseURL     = "https://water.grauxmusic.com";
     static constexpr const char* kSupabaseURL = "https://hlqwvctfmxljjmosfcqq.supabase.co";
 
     //==========================================================================

@@ -366,7 +366,7 @@ void TrackRowComponent::mouseDrag (const juce::MouseEvent& e)
     }
 
     dragStarted = true;
-    CompanionLink::get().requestDrag (cachedWAV.getFullPathName());
+    // requestDrag removed — drag is now handled by WaterMorphCompanion (Swift)
 }
 
 void TrackRowComponent::drawPlayPauseIcon (juce::Graphics& g,

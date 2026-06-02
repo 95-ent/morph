@@ -140,6 +140,12 @@ void MorphAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         {
             if (auto bpm = pos->getBpm())
                 if (*bpm > 0.0) hostBPM.store (*bpm);
+            // Capture the project time signature for grid-aligned morph export.
+            if (auto ts = pos->getTimeSignature())
+            {
+                if (ts->numerator   > 0) hostTimeSigNum.store (ts->numerator);
+                if (ts->denominator > 0) hostTimeSigDen.store (ts->denominator);
+            }
             dawIsPlaying = pos->getIsPlaying();
         }
     }
@@ -169,7 +175,19 @@ void MorphAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             float mono = 0.0f;
             for (int ch = 0; ch < numCh; ++ch)
                 mono += buffer.getReadPointer (ch)[i];
-            analysisBuffer[analysisWritePos++] = mono / static_cast<float> (numCh);
+            mono /= static_cast<float> (numCh);
+
+            // Energy gate: don't let a near-silent intro / breath / count-in
+            // consume the 15 s analysis window. An a cappella often opens with
+            // seconds of silence or a single sparse pickup note, which makes the
+            // first pass key-detect on unrepresentative audio (root cause of the
+            // "A major on first pass, correct only after re-scan" bug). Until the
+            // signal crosses a small energy floor we don't start filling — once we
+            // start, we keep everything so musical rests inside the phrase survive.
+            if (analysisWritePos == 0 && std::abs (mono) < 0.003f)
+                continue;
+
+            analysisBuffer[analysisWritePos++] = mono;
         }
 
         // Expose fill progress to message thread (once per block, not per sample)
@@ -269,7 +287,10 @@ void MorphAudioProcessor::timerCallback()
         if (auto pos = ph->getPosition())
         {
             if (auto bpm = pos->getBpm())
-                if (*bpm > 0.0) hostBPM.store (*bpm);
+                // Don't let the message-thread 120-BPM default overwrite a valid
+                // project tempo already captured by processBlock (audio thread).
+                if (*bpm > 0.0 && (*bpm != 120.0 || hostBPM.load() == 120.0))
+                    hostBPM.store (*bpm);
             playing = pos->getIsPlaying();
             if (auto p = pos->getPpqPosition()) ppq = *p;
         }
@@ -279,7 +300,10 @@ void MorphAudioProcessor::timerCallback()
     //     when the editor window is closed; editor sends at 200 ms when open,
     //     but this 250 ms fallback fires regardless).
     {
-        const double bpm      = getEffectiveBPM();
+        // Use hostBPM directly — processBlock (audio thread) keeps it accurate.
+        // getEffectiveBPM() re-reads the message-thread playhead which can
+        // briefly return 120 (default) even when the project tempo is different.
+        const double bpm      = hostBPM.load();
         const double timeSecs = (bpm > 0.0) ? (ppq / bpm * 60.0) : 0.0;
 
         if (playing)
@@ -300,7 +324,9 @@ void MorphAudioProcessor::timerCallback()
             const juce::String key = trackMode ? getDetectedKey() : getProjectKey();
             CompanionLink::get().sendSync (bpm, key,
                                            trackMode ? "track" : "project",
-                                           timeSecs);
+                                           timeSecs,
+                                           hostTimeSigNum.load(),
+                                           hostTimeSigDen.load());
         }
     }
 
@@ -413,6 +439,17 @@ void MorphAudioProcessor::runBrainAnalysis (std::vector<float> monoBuffer, doubl
             setProjectKey (local.key);
             brainKeyConfirmed.store (true);
         }
+        // Force-push SYNC to companion immediately after C++ detection (don't wait for 1s timer).
+        if (local.key.isNotEmpty())
+        {
+            const bool trackMode = getReferenceMode() == ReferenceMode::kTrack;
+            const juce::String syncKey = trackMode ? getDetectedKey() : getProjectKey();
+            juce::MessageManager::callAsync ([this, syncKey] {
+                CompanionLink::get().sendSync (getEffectiveBPM(), syncKey,
+                                               getReferenceMode() == ReferenceMode::kTrack ? "track" : "project",
+                                               0.0);
+            });
+        }
     }
 
     // Step 2 — Write buffer to JUCE temp dir (Logic sandbox allows this path)
@@ -497,6 +534,12 @@ void MorphAudioProcessor::runBrainAnalysis (std::vector<float> monoBuffer, doubl
             setProjectKey (key);
             brainKeyConfirmed.store (true);
             brainAttempts.store (0);
+            // Immediate SYNC push after Python confirmation
+            juce::MessageManager::callAsync ([this, key] {
+                CompanionLink::get().sendSync (getEffectiveBPM(), key,
+                                               getReferenceMode() == ReferenceMode::kTrack ? "track" : "project",
+                                               0.0);
+            });
         }
         else
         {
@@ -843,12 +886,18 @@ void MorphAudioProcessor::setProjectKey (const juce::String& k)
 {
     const juce::ScopedLock sl (projKeyLock);
     projectKey = k;
-    // If user clears key manually, allow BRAIN to re-detect on next audio chunk
     if (k.isEmpty())
     {
+        // User cleared key → allow BRAIN to re-detect on next audio chunk
         brainKeyConfirmed.store (false);
         brainAttempts.store (0);
         analysisWritePos = 0;
+    }
+    else
+    {
+        // User set a key manually → lock it immediately, abort any running scan.
+        // The scan thread checks brainKeyConfirmed and will exit early.
+        brainKeyConfirmed.store (true);
     }
 }
 
@@ -916,6 +965,11 @@ void MorphAudioProcessor::startStandalonePreview()
         if (err.isEmpty())
         {
             standaloneDevice.addAudioCallback (&standalonePlayer);
+            // Follow the system default output: when the device list changes
+            // (headphones connect/disconnect, default output flips) reopen the
+            // device on the new default so playback never gets stuck on the
+            // built-in speakers.
+            standaloneDevice.addChangeListener (this);
             standaloneDeviceOpen = true;
         }
     }
@@ -927,6 +981,7 @@ void MorphAudioProcessor::stopStandalonePreview()
     standaloneActive.store (false);
     if (standaloneDeviceOpen)
     {
+        standaloneDevice.removeChangeListener (this);
         standalonePlayer.setSource (nullptr);
         standaloneDevice.removeAudioCallback (&standalonePlayer);
         standaloneDevice.closeAudioDevice();
@@ -941,6 +996,58 @@ void MorphAudioProcessor::setStandaloneActive (bool b)
         startStandalonePreview();
     else
         standaloneActive.store (b);
+}
+
+//==============================================================================
+// Audio device list changed (headphones plugged/unplugged, default flip).
+// JUCE's AudioDeviceManager does NOT auto-follow the macOS default output once
+// a device is open, so playback can get stuck on the built-in speakers after a
+// device change. Reopen on the *current* default output so audio follows.
+void MorphAudioProcessor::changeListenerCallback (juce::ChangeBroadcaster* source)
+{
+    if (source == &standaloneDevice)
+        reopenStandaloneOnDefaultDevice();
+}
+
+void MorphAudioProcessor::reopenStandaloneOnDefaultDevice()
+{
+    // Must run on the message thread (device open/close is not realtime-safe).
+    if (! juce::MessageManager::getInstance()->isThisTheMessageThread())
+    {
+        juce::MessageManager::callAsync ([this] { reopenStandaloneOnDefaultDevice(); });
+        return;
+    }
+
+    if (! standaloneDeviceOpen) return;
+
+    auto* dev = standaloneDevice.getCurrentAudioDevice();
+    if (dev == nullptr) return;
+
+    // What is the system default output device right now?
+    if (auto* type = standaloneDevice.getCurrentDeviceTypeObject())
+    {
+        type->scanForDevices();
+        const auto outputs   = type->getDeviceNames (false);          // output devices
+        const int  defIndex  = type->getDefaultDeviceIndex (false);    // default output
+        const juce::String defaultOut =
+            (defIndex >= 0 && defIndex < outputs.size()) ? outputs[defIndex] : juce::String();
+
+        // Already on the default → nothing to do (avoids glitchy reopen loops).
+        if (defaultOut.isEmpty() || dev->getName() == defaultOut)
+            return;
+
+        // Reopen on the new default output. removeAudioCallback first so the
+        // old device drains cleanly, then re-add after the new device is up.
+        standaloneDevice.removeAudioCallback (&standalonePlayer);
+
+        juce::AudioDeviceManager::AudioDeviceSetup setup;
+        standaloneDevice.getAudioDeviceSetup (setup);
+        setup.outputDeviceName       = defaultOut;
+        setup.useDefaultOutputChannels = true;
+        standaloneDevice.setAudioDeviceSetup (setup, true);
+
+        standaloneDevice.addAudioCallback (&standalonePlayer);
+    }
 }
 
 //==============================================================================

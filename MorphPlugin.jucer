@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
-<JUCERPROJECT id="MorphPlugin" name="Morph" projectType="audioplug" version="1.0.7"
+<JUCERPROJECT id="MorphPlugin" name="Morph" projectType="audioplug" version="1.0.8"
               bundleIdentifier="ai.95ent.morph" companyName="Water" companyWebsite="https://water.95ent.ai"
               manufacturerCode="WATR" pluginCode="Mrph" pluginName="Morph"
               pluginDescription="Water catalog browser and real-time morphing plugin"
