@@ -36,40 +36,122 @@ jobs:
       - name: Build
         run: cmake --build build-mac --config Release --parallel
 
-      - name: Collect plugin files
+      - name: Resolve version (single source of truth = CMakeLists.txt)
+        id: ver
         run: |
-          mkdir -p dist/mac
-          find build-mac -name "*.vst3" -exec cp -R {} dist/mac/ \;
-          find build-mac -name "*.component" -exec cp -R {} dist/mac/ \;
+          VER=$(grep -Eo 'project\(Morph VERSION [0-9]+\.[0-9]+\.[0-9]+' CMakeLists.txt | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+')
+          if [ -z "$VER" ]; then echo "Could not parse version from CMakeLists.txt"; exit 1; fi
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "Resolved version: $VER"
+
+      - name: Collect plugin files (deterministic, flat layout asserted)
+        run: |
+          set -euo pipefail
+          # Copy from the single known JUCE artefact paths into a freshly-emptied dir.
+          # Never use `find -exec cp` into a populated dir: re-runs nest Morph.vst3/Morph.vst3.
+          VST3_SRC="build-mac/Morph_artefacts/Release/VST3/Morph.vst3"
+          AU_SRC="build-mac/Morph_artefacts/Release/AU/Morph.component"
+          [ -d "$VST3_SRC" ] || { echo "VST3 artefact missing: $VST3_SRC"; exit 1; }
+          [ -d "$AU_SRC" ]   || { echo "AU artefact missing: $AU_SRC";   exit 1; }
+          rm -rf dist/mac && mkdir -p dist/mac
+          cp -R "$VST3_SRC" dist/mac/Morph.vst3
+          cp -R "$AU_SRC"   dist/mac/Morph.component
+          # Assert flat layout: real binary at Contents/MacOS/Morph, no nested .vst3/.vst3.
+          [ -f dist/mac/Morph.vst3/Contents/MacOS/Morph ] || { echo "VST3 has no flat binary at Contents/MacOS/Morph"; exit 1; }
+          [ -f dist/mac/Morph.component/Contents/MacOS/Morph ] || { echo "AU has no flat binary at Contents/MacOS/Morph"; exit 1; }
+          if [ -e dist/mac/Morph.vst3/Morph.vst3 ]; then echo "NESTED Morph.vst3/Morph.vst3 detected"; exit 1; fi
+          # Assert universal binary (arm64 + x86_64).
+          lipo -archs dist/mac/Morph.vst3/Contents/MacOS/Morph | grep -q arm64
+          lipo -archs dist/mac/Morph.vst3/Contents/MacOS/Morph | grep -q x86_64
+          echo "Collect OK — flat + universal."
+
+      - name: Sign + notarize (only if Developer ID secrets are present)
+        id: sign
+        env:
+          DEVID_APP_CERT_P12_BASE64: ${{ secrets.DEVID_APP_CERT_P12_BASE64 }}
+          DEVID_INSTALLER_CERT_P12_BASE64: ${{ secrets.DEVID_INSTALLER_CERT_P12_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.CERT_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APP_SPECIFIC_PASSWORD: ${{ secrets.APP_SPECIFIC_PASSWORD }}
+          TEAM_ID: ${{ secrets.TEAM_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DEVID_APP_CERT_P12_BASE64:-}" ] || [ -z "${APPLE_ID:-}" ] || [ -z "${TEAM_ID:-}" ]; then
+            echo "Developer ID secrets not set — skipping sign/notarize. Plugins remain ad-hoc (Gatekeeper will reject)."
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          KEYCHAIN=build.keychain
+          KEYCHAIN_PWD="ci-temp-pwd"
+          security create-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN"
+          security default-keychain -s "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN"
+          security set-keychain-settings -t 3600 -u "$KEYCHAIN"
+          echo "$DEVID_APP_CERT_P12_BASE64" | base64 -d > app.p12
+          security import app.p12 -k "$KEYCHAIN" -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          if [ -n "${DEVID_INSTALLER_CERT_P12_BASE64:-}" ]; then
+            echo "$DEVID_INSTALLER_CERT_P12_BASE64" | base64 -d > installer.p12
+            security import installer.p12 -k "$KEYCHAIN" -P "$CERT_PASSWORD" -T /usr/bin/productsign
+          fi
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PWD" "$KEYCHAIN"
+          SIGN_APP="Developer ID Application: Sébastien Graux ($TEAM_ID)"
+          codesign --sign "$SIGN_APP" --force --timestamp --options runtime dist/mac/Morph.vst3/Contents/MacOS/Morph
+          codesign --sign "$SIGN_APP" --force --timestamp --options runtime dist/mac/Morph.component/Contents/MacOS/Morph
+          codesign --sign "$SIGN_APP" --force --timestamp --options runtime dist/mac/Morph.vst3
+          codesign --sign "$SIGN_APP" --force --timestamp --options runtime dist/mac/Morph.component
+          rm -f app.p12 installer.p12
+          echo "signed=true" >> "$GITHUB_OUTPUT"
 
       - name: Build .pkg installer
         run: |
-          mkdir -p pkg-root/Library/Audio/Plug-Ins/VST3
-          mkdir -p pkg-root/Library/Audio/Plug-Ins/Components
+          set -euo pipefail
+          VER="${{ steps.ver.outputs.version }}"
+          rm -rf pkg-root && mkdir -p pkg-root/Library/Audio/Plug-Ins/VST3 pkg-root/Library/Audio/Plug-Ins/Components
           cp -R dist/mac/Morph.vst3 pkg-root/Library/Audio/Plug-Ins/VST3/
           cp -R dist/mac/Morph.component pkg-root/Library/Audio/Plug-Ins/Components/
           pkgbuild \
             --root pkg-root \
             --identifier ai.95ent.morph \
-            --version 1.0.0 \
+            --version "$VER" \
             --install-location / \
-            Water_Morph_1.0.0_macOS.pkg
+            "Water_Morph_${VER}_macOS.pkg"
+
+      - name: Sign + notarize PKG (only if Developer ID secrets are present)
+        if: steps.sign.outputs.signed == 'true'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APP_SPECIFIC_PASSWORD: ${{ secrets.APP_SPECIFIC_PASSWORD }}
+          TEAM_ID: ${{ secrets.TEAM_ID }}
+        run: |
+          set -euo pipefail
+          VER="${{ steps.ver.outputs.version }}"
+          PKG="Water_Morph_${VER}_macOS.pkg"
+          SIGNED="Water_Morph_${VER}_macOS_signed.pkg"
+          if security find-identity -v | grep -q "Developer ID Installer"; then
+            productsign --sign "Developer ID Installer: Sébastien Graux ($TEAM_ID)" --timestamp "$PKG" "$SIGNED"
+          else
+            cp "$PKG" "$SIGNED"
+          fi
+          xcrun notarytool submit "$SIGNED" --apple-id "$APPLE_ID" --password "$APP_SPECIFIC_PASSWORD" --team-id "$TEAM_ID" --wait
+          xcrun stapler staple "$SIGNED"
+          spctl -a -vvv -t install "$SIGNED" || true
+          mv -f "$SIGNED" "$PKG"
 
       - name: Upload Mac installer
         uses: actions/upload-artifact@v4
         with:
-          name: Water_Morph_1.0.0_macOS
-          path: Water_Morph_1.0.0_macOS.pkg
+          name: Water_Morph_${{ steps.ver.outputs.version }}_macOS
+          path: Water_Morph_${{ steps.ver.outputs.version }}_macOS.pkg
           retention-days: 14
 
       - name: Publish Mac to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
-          name: "Water Morph — Latest Build"
+          name: "Water Morph - Latest Build"
           prerelease: true
           make_latest: true
-          files: Water_Morph_1.0.0_macOS.pkg
+          files: Water_Morph_${{ steps.ver.outputs.version }}_macOS.pkg
 
   # ── Windows (VST3, x64) ────────────────────────────────────────────────────
   build-windows:
@@ -88,17 +170,22 @@ jobs:
             "-DJUCE_PATH=${{ github.workspace }}\..\JUCE"
 
       - name: Build
-        # continue-on-error: juce_vst3_helper.exe post-build step can fail on CI
-        # (moduleinfo.json generation) even though the VST3 DLL compiled correctly.
-        continue-on-error: true
+        # NOTE: do NOT mask failures here. A VST3 missing moduleinfo.json loads as
+        # "error" in FL Studio. The Collect step below hard-fails if it is absent.
         run: cmake --build build-win --config Release --parallel
 
-      - name: Collect VST3
+      - name: Collect VST3 (assert flat layout + moduleinfo.json)
         run: |
-          $vst3 = Get-ChildItem -Path build-win -Filter "Morph.vst3" -Recurse -Directory | Select-Object -First 1
-          if (-not $vst3) { Write-Error "VST3 not found — compile failed"; exit 1 }
+          $vst3 = Get-ChildItem -Path build-win -Filter "Morph.vst3" -Recurse -Directory |
+            Where-Object { Test-Path (Join-Path $_.FullName 'Contents') } | Select-Object -First 1
+          if (-not $vst3) { Write-Error "VST3 not found - compile failed"; exit 1 }
+          Remove-Item -Recurse -Force dist\win -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path dist\win | Out-Null
-          Copy-Item -Path $vst3.FullName -Destination dist\win -Recurse
+          Copy-Item -Path $vst3.FullName -Destination dist\win\Morph.vst3 -Recurse
+          $mi = Join-Path 'dist\win\Morph.vst3' 'Contents\Resources\moduleinfo.json'
+          if (-not (Test-Path $mi)) { Write-Error "moduleinfo.json missing - FL Studio will error. Failing build."; exit 1 }
+          if (Test-Path 'dist\win\Morph.vst3\Morph.vst3') { Write-Error "nested Morph.vst3\Morph.vst3 detected"; exit 1 }
+          Write-Host "Windows VST3 collect OK - moduleinfo.json present, flat layout."
 
       - name: Upload Windows VST3 artifact
         uses: actions/upload-artifact@v4
