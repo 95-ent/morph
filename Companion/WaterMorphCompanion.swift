@@ -1,7 +1,8 @@
 // WaterMorphCompanion.swift
-// Morph — Water library browser and DAW drag companion.
+// Morph — Water library browser + DAW copy companion.
 // Native macOS app: no dock icon, floating panel, menu bar toggle.
-// Drag originates from THIS window (no sandbox), so NSDraggingSession works.
+// Native drag-to-DAW removed (CEO directive): sounds reach the DAW only via the
+// gated Copy button (web can('copy') + spendDownloadCredits → morphCopy → pasteboard).
 
 import Cocoa
 import AVFoundation
@@ -11,7 +12,7 @@ import Darwin
 
 // MARK: - Constants
 
-private let kBaseURL    = "https://water.95ent.ai"
+private let kBaseURL    = "https://water.grauxmusic.com"
 private let kSbURL      = "https://hlqwvctfmxljjmosfcqq.supabase.co"
 private let kSbAnonKey  = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhscXd2Y3RmbXhsamptb3NmY3FxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MjY1OTExNDksImV4cCI6MjA0MjE2NzE0OX0.3u7eC9w9mOVvs_yzf1l5aNpamA681EPwVk-94mqseKU"
 private let kTCPPort: in_port_t = 59812
@@ -29,17 +30,26 @@ final class WMSyncState {
     private(set) var key:      String = ""
     private(set) var mode:     String = "project"
     private(set) var timeSecs: Double = 0.0
+    private(set) var tsNum:    Int    = 4   // project time signature numerator
+    private(set) var tsDen:    Int    = 4   // project time signature denominator
     private var lastSyncTime: Date = .distantPast
     var onChange: (() -> Void)?
 
-    func update(bpm: Double, key: String, mode: String, timeSecs: Double = 0.0) {
+    func update(bpm: Double, key: String, mode: String, timeSecs: Double = 0.0,
+                tsNum: Int = 4, tsDen: Int = 4) {
         self.bpm          = bpm
         self.key          = key
         self.mode         = mode
         self.timeSecs     = timeSecs
+        self.tsNum        = tsNum
+        self.tsDen        = tsDen
         self.lastSyncTime = Date()
         onChange?()
     }
+
+    /// Beats per bar (e.g. 4 for 4/4, 6 for 6/8 counted in eighths → 3 quarter
+    /// beats). For grid alignment we use quarter-note beats: tsNum * 4/tsDen.
+    var beatsPerBar: Double { Double(tsNum) * 4.0 / Double(max(1, tsDen)) }
 
     // Connected = received a SYNC in the last 3 seconds
     var isConnected: Bool { Date().timeIntervalSince(lastSyncTime) < 3.0 }
@@ -152,6 +162,23 @@ final class WMAPIClient {
 
     func fetchAllTracks(completion: @escaping (Bool, [WMTrack]) -> Void) {
         fetchPage(1, acc: [], didRefresh: false, completion: completion)
+    }
+
+    func fetchUserProfile(completion: @escaping (String, Int) -> Void) {
+        guard let url = URL(string: "\(kSbURL)/rest/v1/profiles?select=handle,credits&limit=1") else { return }
+        var req = URLRequest(url: url, timeoutInterval: 10)
+        req.setValue(kSbAnonKey, forHTTPHeaderField: "apikey")
+        req.setValue("Bearer \(WMTokenStore.shared.accessToken)", forHTTPHeaderField: "Authorization")
+        session.dataTask(with: req) { data, resp, _ in
+            guard let data, (resp as? HTTPURLResponse)?.statusCode == 200,
+                  let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
+                  let profile = arr.first else {
+                DispatchQueue.main.async { completion("", 0) }; return
+            }
+            let handle  = profile["handle"]  as? String ?? ""
+            let credits = profile["credits"] as? Int    ?? 0
+            DispatchQueue.main.async { completion(handle, credits) }
+        }.resume()
     }
 
     func refreshTokens(completion: @escaping (Bool) -> Void) {
@@ -415,20 +442,11 @@ final class WMAudioAnalyzer {
     }
 }
 
-// MARK: - Custom NSTableView with drag support
+// MARK: - Custom NSTableView (drag-to-DAW removed — copy-only via web gate)
 
 final class WMTableView: NSTableView {
-    var onDragRow: ((Int, NSEvent) -> Void)?
-
-    override func draggingSession(_ session: NSDraggingSession,
-                                  sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .copy }
-
-    override func mouseDragged(with event: NSEvent) {
-        let pt  = convert(event.locationInWindow, from: nil)
-        let row = self.row(at: pt)
-        guard row >= 0 else { return }
-        onDragRow?(row, event)
-    }
+    // Native drag-to-DAW removed per CEO directive (ungated catalog-export leak).
+    // Sounds now reach the DAW exclusively through the gated Copy button.
 }
 
 // MARK: - Track row view
@@ -947,7 +965,6 @@ final class WMLibraryVC: NSViewController, NSTableViewDataSource, NSTableViewDel
         tableView.intercellSpacing        = NSSize(width: 0, height: 4)
         tableView.dataSource              = self
         tableView.delegate                = self
-        tableView.onDragRow               = { [weak self] row, event in self?.startDrag(row: row, event: event) }
 
         scrollView.documentView       = tableView
         scrollView.hasVerticalScroller = true
@@ -1020,10 +1037,11 @@ final class WMLibraryVC: NSViewController, NSTableViewDataSource, NSTableViewDel
               !downloadingIds.contains(key) else { return }
         downloadingIds.insert(key)
         let input = track.cachedFile
+        let bpb = sync.beatsPerBar
         DispatchQueue.global(qos: .background).async { [weak self] in
             _ = try? WMMorphEngine.render(input: input, sourceBPM: track.bpm,
                                           targetBPM: tgt, semitoneDelta: semis,
-                                          trackName: track.name)
+                                          trackName: track.name, beatsPerBar: bpb)
             DispatchQueue.main.async { self?.downloadingIds.remove(key) }
         }
     }
@@ -1192,40 +1210,9 @@ final class WMLibraryVC: NSViewController, NSTableViewDataSource, NSTableViewDel
         }
     }
 
-    // MARK: Drag to DAW — delivers morphed WAV when Morph is active
-
-    private func startDrag(row: Int, event: NSEvent) {
-        guard row < filtered.count else { return }
-        let track = filtered[row]
-
-        guard cachedIds.contains(track.id),
-              FileManager.default.fileExists(atPath: track.cachedFile.path) else {
-            prefetchIfNeeded(track); return
-        }
-
-        let sync   = WMSyncState.shared
-        let pbItem = NSPasteboardItem()
-
-        if isMorphed && sync.isConnected && track.bpm > 0 {
-            let semis = semitonesBetween(from: track.key, to: sync.key)
-            let label = WMMorphEngine.displayName(trackName: track.name, bpm: sync.bpm, key: sync.key)
-            pbItem.setDataProvider(
-                WMMorphDragProvider(track: track, targetBPM: sync.bpm, semitoneDelta: semis, displayName: label),
-                forTypes: [.fileURL])
-        } else {
-            pbItem.setDataProvider(WMDragFileProvider(track), forTypes: [.fileURL])
-        }
-
-        let dragItem = NSDraggingItem(pasteboardWriter: pbItem)
-        let rowRect  = tableView.rect(ofRow: row)
-        let icon: NSImage
-        if #available(macOS 11.0, *) { icon = NSWorkspace.shared.icon(for: UTType.audio) }
-        else { icon = NSWorkspace.shared.icon(forFileType: "mp3") }
-        icon.size = NSSize(width: 32, height: 32)
-        dragItem.setDraggingFrame(NSRect(x: rowRect.midX - 16, y: rowRect.midY - 16, width: 32, height: 32),
-                                  contents: icon)
-        tableView.beginDraggingSession(with: [dragItem], event: event, source: tableView)
-    }
+    // Native drag-to-DAW removed per CEO directive (ungated catalog-export leak).
+    // This native list VC is not the shipping surface (the app uses WMWebLibraryVC),
+    // but the drag path is neutralized here too so no ungated export path remains.
 
     // MARK: NSTableViewDataSource / Delegate
 
@@ -1354,45 +1341,6 @@ private final class WKMessageProxy: NSObject, WKScriptMessageHandler {
     }
 }
 
-// MARK: - Lazy drag file provider
-
-/// Delivers the mp3 to the drop target on demand, blocking until the download
-/// completes. AppKit calls this on an indeterminate (non-main) thread — safe to block.
-final class WMDragFileProvider: NSObject, NSPasteboardItemDataProvider {
-    private let track: WMTrack
-    init(_ track: WMTrack) { self.track = track; super.init() }
-
-    func pasteboard(_ pasteboard: NSPasteboard?,
-                    item: NSPasteboardItem,
-                    provideDataForType type: NSPasteboard.PasteboardType) {
-        guard type == .fileURL else { return }
-        let dest = track.cachedFile
-        if !FileManager.default.fileExists(atPath: dest.path) {
-            let sem = DispatchSemaphore(value: 0)
-            WMAPIClient.shared.downloadForDrag(track) { _ in sem.signal() }
-            _ = sem.wait(timeout: .now() + 30)
-        }
-        guard FileManager.default.fileExists(atPath: dest.path) else { return }
-
-        // Build a human-readable filename: "Track Name (Gbm 144bpm).mp3"
-        let safeName = track.name
-            .replacingOccurrences(of: "/", with: "-")
-            .replacingOccurrences(of: ":", with: "-")
-            .replacingOccurrences(of: "\"", with: "")
-        let keyPart  = track.key.isEmpty  ? "" : " \(track.key)"
-        let bpmPart  = track.bpm > 0      ? " \(Int(track.bpm))bpm" : ""
-        let label    = keyPart.isEmpty && bpmPart.isEmpty ? "" : " (\(keyPart.trimmingCharacters(in: .whitespaces))\(bpmPart))"
-        let fileName = "\(safeName)\(label).mp3"
-        let named    = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(fileName)
-        try? FileManager.default.removeItem(at: named)
-        try? FileManager.default.copyItem(at: dest, to: named)
-        let final = FileManager.default.fileExists(atPath: named.path) ? named : dest
-        item.setString(final.absoluteString, forType: .fileURL)
-    }
-
-    func pasteboardFinishedWithDataProvider(_ pasteboard: NSPasteboard) {}
-}
-
 // MARK: - Offline morph engine (time-stretch + pitch-shift via AVAudioEngine)
 
 final class WMMorphEngine {
@@ -1421,7 +1369,8 @@ final class WMMorphEngine {
                        sourceBPM: Double,
                        targetBPM: Double,
                        semitoneDelta: Int,
-                       trackName: String = "") throws -> URL {
+                       trackName: String = "",
+                       beatsPerBar: Double = 4.0) throws -> URL {
         guard FileManager.default.fileExists(atPath: input.path) else {
             throw MorphError.fileNotFound
         }
@@ -1433,6 +1382,9 @@ final class WMMorphEngine {
         let ratio   = max(0.25, min(4.0, targetBPM / sourceBPM))
         tp.rate     = Float(ratio)
         tp.pitch    = Float(semitoneDelta * 100)  // cents
+        // Higher overlap = smoother phase-vocoder output, fewer metallic/phasey
+        // artifacts on vocals (default is 8.0). 32 is the practical max quality.
+        tp.overlap  = 32.0
 
         engine.attach(player)
         engine.attach(tp)
@@ -1455,21 +1407,42 @@ final class WMMorphEngine {
             : trackName
         let outName = WMMorphEngine.morphedName(trackName: resolvedName, bpm: targetBPM, semitones: semitoneDelta)
         let outURL   = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(outName)
+        // 24-bit PCM (vs 16-bit) removes audible quantization noise on quiet
+        // tails/breaths and matches what DAWs expect from a clip import. Sample
+        // rate follows the source so there is no resample step in the render.
         let settings: [String: Any] = [
             AVFormatIDKey:         kAudioFormatLinearPCM,
             AVSampleRateKey:       fmt.sampleRate,
             AVNumberOfChannelsKey: fmt.channelCount,
-            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMBitDepthKey: 24,
             AVLinearPCMIsFloatKey: false,
         ]
         let outFile = try AVAudioFile(forWriting: outURL, settings: settings)
-        let totalOut = AVAudioFrameCount(Double(file.length) / ratio) + 4096
-        let buf      = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: 4096)!
+        let sr      = fmt.sampleRate
+
+        // Grid alignment: the morphed loop must tile to the DAW's bar grid so that,
+        // when pasted, its downbeat lands on a bar line and successive loops stay
+        // locked. After stretching to targetBPM the *natural* length is
+        // file.length/ratio frames; we snap that to the nearest whole bar at the
+        // target tempo using the project's actual time signature (beatsPerBar,
+        // sent by the plugin via SYNC — defaults to 4/4). Trimming/padding to a
+        // whole-bar boundary removes the sub-bar remainder that otherwise pushes
+        // every repeat off the grid.
+        let naturalOut = Double(file.length) / ratio
+        let framesPerBar = (targetBPM > 0)
+            ? sr * 60.0 / targetBPM * beatsPerBar
+            : naturalOut
+        let bars = max(1.0, (naturalOut / framesPerBar).rounded())
+        let alignedOut = AVAudioFrameCount((bars * framesPerBar).rounded())
+        // Render slightly past the aligned length to capture the phase-vocoder
+        // tail, then write exactly alignedOut frames (pad with silence if short).
+        let renderCeiling = alignedOut + 8192
+        let buf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: 4096)!
         var written: AVAudioFrameCount = 0
 
         var stuckCount = 0
-        while written < totalOut {
-            let frames = min(4096, totalOut - written)
+        while written < renderCeiling {
+            let frames = min(4096, renderCeiling - written)
             buf.frameLength = frames
             let st = try engine.renderOffline(frames, to: buf)
             if st == .insufficientDataFromInputNode { break }
@@ -1480,8 +1453,24 @@ final class WMMorphEngine {
                 continue
             }
             stuckCount = 0
-            if buf.frameLength > 0 { try outFile.write(from: buf) }
-            written += buf.frameLength
+            if buf.frameLength > 0 {
+                // Write only up to the bar-aligned length — trim any overshoot.
+                if written + buf.frameLength > alignedOut {
+                    let keep = alignedOut > written ? alignedOut - written : 0
+                    if keep > 0 { buf.frameLength = keep; try outFile.write(from: buf) }
+                    written = alignedOut
+                    break
+                }
+                try outFile.write(from: buf)
+                written += buf.frameLength
+            }
+        }
+        // Pad the final partial bar with silence so the clip length is exact.
+        if written < alignedOut {
+            let pad = AVAudioPCMBuffer(pcmFormat: fmt,
+                                       frameCapacity: alignedOut - written)!
+            pad.frameLength = alignedOut - written   // zero-initialised = silence
+            try outFile.write(from: pad)
         }
         engine.stop()
 
@@ -1493,91 +1482,11 @@ final class WMMorphEngine {
     }
 }
 
-// Delivers a pre-named raw file (copy to display-name temp file)
-final class WMNamedDragProvider: NSObject, NSPasteboardItemDataProvider {
-    private let source: URL
-    private let displayName: String
-    init(source: URL, displayName: String) { self.source = source; self.displayName = displayName; super.init() }
-
-    func pasteboard(_ pasteboard: NSPasteboard?, item: NSPasteboardItem,
-                    provideDataForType type: NSPasteboard.PasteboardType) {
-        guard type == .fileURL else { return }
-        let named = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(displayName)
-        try? FileManager.default.removeItem(at: named)
-        try? FileManager.default.copyItem(at: source, to: named)
-        let final = FileManager.default.fileExists(atPath: named.path) ? named : source
-        item.setString(final.absoluteString, forType: .fileURL)
-    }
-    func pasteboardFinishedWithDataProvider(_ pasteboard: NSPasteboard) {}
-}
-
-// Delivers a morphed WAV (blocks on render; called from non-main thread by AppKit)
-final class WMMorphDragProvider: NSObject, NSPasteboardItemDataProvider {
-    private let track: WMTrack
-    private let targetBPM: Double
-    private let semitoneDelta: Int
-    private let displayName: String
-
-    init(track: WMTrack, targetBPM: Double, semitoneDelta: Int, displayName: String) {
-        self.track = track; self.targetBPM = targetBPM
-        self.semitoneDelta = semitoneDelta; self.displayName = displayName
-        super.init()
-    }
-
-    func pasteboard(_ pasteboard: NSPasteboard?, item: NSPasteboardItem,
-                    provideDataForType type: NSPasteboard.PasteboardType) {
-        guard type == .fileURL else { return }
-        let src = track.cachedFile
-        // Ensure raw file is available
-        if !FileManager.default.fileExists(atPath: src.path) {
-            let sem = DispatchSemaphore(value: 0)
-            WMAPIClient.shared.downloadForDrag(track) { _ in sem.signal() }
-            _ = sem.wait(timeout: .now() + 30)
-        }
-        guard FileManager.default.fileExists(atPath: src.path) else { return }
-
-        // Check for pre-rendered morph (background render started on hover).
-        // Validate size > 8KB — a failed render leaves an empty WAV header.
-        let preRenderName = WMMorphEngine.morphedName(trackName: track.name, bpm: targetBPM, semitones: semitoneDelta)
-        let preRenderURL  = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(preRenderName)
-        let preSize = (try? FileManager.default.attributesOfItem(atPath: preRenderURL.path))?[FileAttributeKey.size] as? Int ?? 0
-        if preSize > 8192 {
-            // Copy to display-name path so Logic receives "Baby No More [Bmin 91bpm].wav"
-            let namedURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(displayName)
-            if preRenderURL.path != namedURL.path {
-                try? FileManager.default.removeItem(at: namedURL)
-                try? FileManager.default.copyItem(at: preRenderURL, to: namedURL)
-            }
-            let final = FileManager.default.fileExists(atPath: namedURL.path) ? namedURL : preRenderURL
-            item.setString(final.absoluteString, forType: .fileURL)
-            return
-        }
-
-        // Render now (on-demand, blocks until done)
-        if let morphed = try? WMMorphEngine.render(input: src,
-                                                    sourceBPM: track.bpm > 0 ? track.bpm : targetBPM,
-                                                    targetBPM: targetBPM,
-                                                    semitoneDelta: semitoneDelta,
-                                                    trackName: track.name) {
-            // Copy to display-name path so Logic receives "Baby No More [Bmin 91bpm].wav"
-            let namedURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(displayName)
-            if morphed.path != namedURL.path {
-                try? FileManager.default.removeItem(at: namedURL)
-                try? FileManager.default.copyItem(at: morphed, to: namedURL)
-            }
-            let final = FileManager.default.fileExists(atPath: namedURL.path) ? namedURL : morphed
-            item.setString(final.absoluteString, forType: .fileURL)
-        } else {
-            // Morph failed — fall back to raw file with display name
-            let named = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(displayName)
-            try? FileManager.default.removeItem(at: named)
-            try? FileManager.default.copyItem(at: src, to: named)
-            let final = FileManager.default.fileExists(atPath: named.path) ? named : src
-            item.setString(final.absoluteString, forType: .fileURL)
-        }
-    }
-    func pasteboardFinishedWithDataProvider(_ pasteboard: NSPasteboard) {}
-}
+// NOTE: WMNamedDragProvider + WMMorphDragProvider removed per CEO directive.
+// They delivered raw/morphed audio to the DAW via native drag with NO web gate
+// (no can('copy'), no spendDownloadCredits) — an ungated catalog-export leak.
+// The only path audio reaches the DAW now is the gated Copy button
+// (web → morphCopy → handleCopyModified → pasteboard).
 
 // Semitone distance between two key strings ("Dmin", "Cmaj", etc.)
 func semitonesBetween(from: String, to: String) -> Int {
@@ -1596,59 +1505,13 @@ func semitonesBetween(from: String, to: String) -> Int {
     return diff
 }
 
-// MARK: - WKWebView subclass for native DAW drag
+// MARK: - WKWebView subclass
 
-final class MorphWebView: WKWebView, NSDraggingSource {
+// Native DAW drag removed per CEO directive. `hoveredId` is retained only to warm
+// the player/morph cache on hover (prefetchIfNeeded / preMorphIfNeeded) — it no
+// longer initiates any drag-to-DAW. Audio reaches the DAW only via the gated Copy.
+final class MorphWebView: WKWebView {
     var hoveredId = ""
-    var onNativeDrag: ((String, NSEvent) -> Void)?
-    private var mouseDownPt: NSPoint = .zero
-    private let kDragThreshold: CGFloat = 8
-
-    func draggingSession(_ session: NSDraggingSession,
-                         sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .copy }
-
-    override func mouseDown(with event: NSEvent) {
-        mouseDownPt = event.locationInWindow
-        super.mouseDown(with: event)
-    }
-
-    override func mouseDragged(with event: NSEvent) {
-        if !hoveredId.isEmpty {
-            let dx = event.locationInWindow.x - mouseDownPt.x
-            let dy = event.locationInWindow.y - mouseDownPt.y
-            if sqrt(dx*dx + dy*dy) >= kDragThreshold {
-                // Don't start DAW drag when mouseDown originated in the player bar
-                // (bottom ~65px of the webView — player bar is ~56px tall).
-                // That zone uses pointer capture for KEY/BPM knob drag.
-                let localDown = convert(mouseDownPt, from: nil)
-                guard localDown.y >= 65 else {
-                    super.mouseDragged(with: event)
-                    return
-                }
-                onNativeDrag?(hoveredId, event)
-                return
-            }
-        }
-        super.mouseDragged(with: event)
-    }
-}
-
-// MARK: - Draggable selection bar button
-
-final class WMDragButton: NSView, NSDraggingSource {
-    var onDrag: ((NSEvent) -> Void)?
-    private var downPt: NSPoint = .zero
-    private let kThresh: CGFloat = 6
-
-    func draggingSession(_ session: NSDraggingSession,
-                         sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .copy }
-    override func mouseDown(with event: NSEvent) { downPt = event.locationInWindow }
-    override func mouseDragged(with event: NSEvent) {
-        let dx = event.locationInWindow.x - downPt.x
-        let dy = event.locationInWindow.y - downPt.y
-        if sqrt(dx*dx + dy*dy) >= kThresh { onDrag?(event) }
-    }
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
 // MARK: - Web library view controller (WKWebView, Splice-style: Water UI as-is)
@@ -1662,22 +1525,22 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
     private var navFwdBtn: NSButton!
     private var navTabBtns: [NSButton] = []
     private let kNavTabs: [(label: String, path: String, icon: String)] = [
-        ("Library",     "/library",     "house.fill"),
-        ("Favorites",   "/favorites",   "heart.fill"),
-        ("Downloads",   "/library",     "arrow.down.circle.fill"),
+        ("Discover",    "/discover",    "music.note.list"),
+        ("Favorites",   "/favorites",   "heart"),
+        ("Downloads",   "/downloads",   "arrow.down.circle"),
     ]
     private var syncDot: NSView!
     private var syncModeLabel: NSTextField!
     private var syncBpmLabel: NSTextField!
     private var syncKeyLabel: NSTextField!
     private var morphBtn: NSButton!
+    private var userInfoLabel: NSTextField!
     private var navTitleLabel: NSTextField!
     private var activeTabIdx: Int = 0
     private var selBar: NSView!
     private var selBarH: NSLayoutConstraint!
     private var selLabel: NSTextField!
     private var selEditBtn: NSButton!
-    private var selDragBtn: WMDragButton!
     private var feedbackStrip: NSView!
     private var loadingOverlay: NSView?
     private var isMorphed = false
@@ -1691,6 +1554,15 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
 
     override func loadView() {
         let config = WKWebViewConfiguration()
+        // Allow audio/video to play inline without user gesture — required for
+        // the companion player to start and keep playing without interaction.
+        config.mediaTypesRequiringUserActionForPlayback = []
+        // Prevent WKWebView from throttling JS (requestAnimationFrame) when the
+        // non-activating panel loses focus — without this, WaveSurfer loses its
+        // rAF loop after ~3s and the player stops mid-track.
+        if #available(macOS 14.0, *) {
+            config.preferences.inactiveSchedulingPolicy = .none
+        }
         // Use the non-deprecated addScriptMessageHandler(_:contentWorld:name:) on macOS 11+.
         // The legacy add(_:name:) overload was deprecated in macOS 14 (Sonoma) and triggers
         // an internal WebKit precondition (EXC_BREAKPOINT) on macOS 14+ at call time.
@@ -1706,14 +1578,32 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
             config.userContentController.add(proxy, name: "morphCopy")
             config.userContentController.add(proxy, name: "morphPlayerState")
         }
+        // Inject companion platform flag — fires before any React code runs
+        // so isCompanionMode() always returns true without relying on UA parsing.
+        let platformScript = WKUserScript(
+            source: "window.__waterCompanionPlatform = 'mac';",
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true
+        )
+        config.userContentController.addUserScript(platformScript)
+
         // Auth UserScript is injected dynamically in loadWebUI() so it always
         // uses the latest (possibly refreshed) tokens, never a stale snapshot.
+
+        // Clear ONLY disk/memory cache + service workers — preserve cookies + localStorage
+        // (Supabase session lives in localStorage + cookies — clearing those destroys auth)
+        let cacheOnly: Set<String> = [
+            WKWebsiteDataTypeDiskCache,
+            WKWebsiteDataTypeMemoryCache,
+            WKWebsiteDataTypeOfflineWebApplicationCache,
+            WKWebsiteDataTypeServiceWorkerRegistrations
+        ]
+        WKWebsiteDataStore.default().removeData(ofTypes: cacheOnly, modifiedSince: .distantPast) { }
 
         webView = MorphWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = self
         webView.allowsBackForwardNavigationGestures = false
         webView.underPageBackgroundColor = kBG
-        webView.onNativeDrag = { [weak self] id, event in self?.handleDrag(id, event) }
         // Must include "WaterMorphCompanion" so CompanionBridge activates
         // window.__waterCompanion in the React app (setLock / clearLock bridge).
         webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) WaterMorphCompanion/1.0"
@@ -1743,13 +1633,13 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
 
         // BPM value — big and bold
         syncBpmLabel = NSTextField(labelWithString: "—")
-        syncBpmLabel.font = .monospacedSystemFont(ofSize: 21, weight: .heavy)
+        syncBpmLabel.font = .monospacedSystemFont(ofSize: 13, weight: .semibold)
         syncBpmLabel.textColor = .white
         syncBpmLabel.translatesAutoresizingMaskIntoConstraints = false
 
         // KEY — same size, mauve when morphed
         syncKeyLabel = NSTextField(labelWithString: "")
-        syncKeyLabel.font = .monospacedSystemFont(ofSize: 21, weight: .heavy)
+        syncKeyLabel.font = .monospacedSystemFont(ofSize: 13, weight: .semibold)
         syncKeyLabel.textColor = .init(white: 0.55, alpha: 1)
         syncKeyLabel.translatesAutoresizingMaskIntoConstraints = false
 
@@ -1766,10 +1656,16 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
         morphBtn.font = .systemFont(ofSize: 12, weight: .semibold)
         morphBtn.translatesAutoresizingMaskIntoConstraints = false
 
+        userInfoLabel = NSTextField(labelWithString: "")
+        userInfoLabel.font = .systemFont(ofSize: 10.5, weight: .regular)
+        userInfoLabel.textColor = NSColor(white: 0.45, alpha: 1)
+        userInfoLabel.translatesAutoresizingMaskIntoConstraints = false
+
         syncBar.addSubview(syncDot)
         syncBar.addSubview(syncModeLabel)
         syncBar.addSubview(syncBpmLabel)
         syncBar.addSubview(syncKeyLabel)
+        syncBar.addSubview(userInfoLabel)
         syncBar.addSubview(morphBtn)
         syncBar.translatesAutoresizingMaskIntoConstraints = false
 
@@ -1817,10 +1713,11 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
             navBar.addSubview(btn)
         }
 
-        // Page title label — between arrows and tabs
-        navTitleLabel = NSTextField(labelWithString: "Library")
+        // Page title label — hidden (icon-only nav, no text label)
+        navTitleLabel = NSTextField(labelWithString: "")
         navTitleLabel.font = .systemFont(ofSize: 12, weight: .semibold)
         navTitleLabel.textColor = NSColor(white: 0.85, alpha: 1)
+        navTitleLabel.isHidden = true
         navTitleLabel.translatesAutoresizingMaskIntoConstraints = false
         navBar.addSubview(navTitleLabel)
 
@@ -1853,10 +1750,10 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
             navTitleLabel.leadingAnchor.constraint(equalTo: navFwdBtn.trailingAnchor, constant: 8),
             navTitleLabel.centerYAnchor.constraint(equalTo: navBar.centerYAnchor),
 
-            tabStack.leadingAnchor.constraint(equalTo: navTitleLabel.trailingAnchor, constant: 4),
-            tabStack.trailingAnchor.constraint(equalTo: navBar.trailingAnchor),
-            tabStack.topAnchor.constraint(equalTo: navBar.topAnchor),
-            tabStack.bottomAnchor.constraint(equalTo: navBar.bottomAnchor, constant: -1),
+            tabStack.centerXAnchor.constraint(equalTo: navBar.centerXAnchor),
+            tabStack.widthAnchor.constraint(equalToConstant: 200),
+            tabStack.centerYAnchor.constraint(equalTo: navBar.centerYAnchor),
+            tabStack.heightAnchor.constraint(equalTo: navBar.heightAnchor),
 
             sep.leadingAnchor.constraint(equalTo: navBar.leadingAnchor),
             sep.trailingAnchor.constraint(equalTo: navBar.trailingAnchor),
@@ -1880,22 +1777,8 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
         selLabel.textColor = kTeal
         selLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        selDragBtn = WMDragButton(frame: .zero)
-        selDragBtn.wantsLayer = true
-        selDragBtn.layer?.backgroundColor = kTeal.withAlphaComponent(0.2).cgColor
-        selDragBtn.layer?.cornerRadius = 6
-        selDragBtn.translatesAutoresizingMaskIntoConstraints = false
-        selDragBtn.toolTip = "Drag tracks to DAW"
-        selDragBtn.onDrag = { [weak self] event in self?.handleMultiDrag(event) }
-
-        let dragLabel = NSTextField(labelWithString: "⇥ Drag to DAW")
-        dragLabel.font = .systemFont(ofSize: 11, weight: .medium)
-        dragLabel.textColor = kTeal
-        dragLabel.isEditable = false
-        dragLabel.isBordered = false
-        dragLabel.backgroundColor = .clear
-        dragLabel.translatesAutoresizingMaskIntoConstraints = false
-        selDragBtn.addSubview(dragLabel)
+        // Drag-to-DAW button removed per CEO directive (ungated catalog-export leak).
+        // Only the bulk-edit button remains on the selection bar.
 
         selEditBtn = NSButton(frame: .zero)
         selEditBtn.isBordered = false
@@ -1912,7 +1795,6 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
 
         selBar.addSubview(selLabel)
         selBar.addSubview(selEditBtn)
-        selBar.addSubview(selDragBtn)
         container.addSubview(selBar)
 
         // ── Feedback strip — must be created before constraints reference it ──
@@ -1936,6 +1818,7 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
         fbBtn.translatesAutoresizingMaskIntoConstraints = false
         feedbackStrip.addSubview(fbSep)
         feedbackStrip.addSubview(fbBtn)
+        feedbackStrip.isHidden = false
         container.addSubview(feedbackStrip)
 
         NSLayoutConstraint.activate([
@@ -1950,13 +1833,15 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
             syncDot.widthAnchor.constraint(equalToConstant: 8),
             syncDot.heightAnchor.constraint(equalToConstant: 8),
 
+            // Status label left
             syncModeLabel.leadingAnchor.constraint(equalTo: syncDot.trailingAnchor, constant: 6),
             syncModeLabel.centerYAnchor.constraint(equalTo: syncBar.centerYAnchor),
 
-            syncBpmLabel.leadingAnchor.constraint(equalTo: syncModeLabel.trailingAnchor, constant: 10),
+            // BPM + KEY — between status and morphBtn
+            syncBpmLabel.leadingAnchor.constraint(equalTo: syncModeLabel.trailingAnchor, constant: 8),
             syncBpmLabel.centerYAnchor.constraint(equalTo: syncBar.centerYAnchor),
 
-            syncKeyLabel.leadingAnchor.constraint(equalTo: syncBpmLabel.trailingAnchor, constant: 6),
+            syncKeyLabel.leadingAnchor.constraint(equalTo: syncBpmLabel.trailingAnchor, constant: 4),
             syncKeyLabel.centerYAnchor.constraint(equalTo: syncBar.centerYAnchor),
 
             // Nav bar (36px — icon-only tabs, compact)
@@ -1971,11 +1856,14 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
             webView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             webView.bottomAnchor.constraint(equalTo: selBar.topAnchor),
 
-            // morphBtn in syncBar — right side pill
+            // morphBtn — right side, prominent
             morphBtn.trailingAnchor.constraint(equalTo: syncBar.trailingAnchor, constant: -10),
             morphBtn.centerYAnchor.constraint(equalTo: syncBar.centerYAnchor),
             morphBtn.heightAnchor.constraint(equalToConstant: 28),
-            morphBtn.widthAnchor.constraint(equalToConstant: 118),
+            morphBtn.widthAnchor.constraint(equalToConstant: 120),
+
+            userInfoLabel.trailingAnchor.constraint(equalTo: morphBtn.leadingAnchor, constant: -10),
+            userInfoLabel.centerYAnchor.constraint(equalTo: syncBar.centerYAnchor),
         ])
 
         // selBar height stored so updateSelectionBar can collapse it to 0 when hidden
@@ -1989,15 +1877,7 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
             selLabel.leadingAnchor.constraint(equalTo: selBar.leadingAnchor, constant: 14),
             selLabel.centerYAnchor.constraint(equalTo: selBar.centerYAnchor),
 
-            selDragBtn.trailingAnchor.constraint(equalTo: selBar.trailingAnchor, constant: -12),
-            selDragBtn.centerYAnchor.constraint(equalTo: selBar.centerYAnchor),
-            selDragBtn.heightAnchor.constraint(equalToConstant: 28),
-            selDragBtn.widthAnchor.constraint(equalToConstant: 110),
-
-            dragLabel.centerXAnchor.constraint(equalTo: selDragBtn.centerXAnchor),
-            dragLabel.centerYAnchor.constraint(equalTo: selDragBtn.centerYAnchor),
-
-            selEditBtn.trailingAnchor.constraint(equalTo: selDragBtn.leadingAnchor, constant: -8),
+            selEditBtn.trailingAnchor.constraint(equalTo: selBar.trailingAnchor, constant: -12),
             selEditBtn.centerYAnchor.constraint(equalTo: selBar.centerYAnchor),
             selEditBtn.heightAnchor.constraint(equalToConstant: 28),
             selEditBtn.widthAnchor.constraint(equalToConstant: 70),
@@ -2052,8 +1932,16 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
             self.updateSyncUI()
         }
         updateSyncUI()
-        // KVO: keep nav bar active state in sync during client-side route changes
         webView.addObserver(self, forKeyPath: #keyPath(WKWebView.url), options: .new, context: nil)
+
+        // Fetch account info and display in syncBar
+        WMAPIClient.shared.fetchUserProfile { [weak self] handle, credits in
+            guard let self else { return }
+            if !handle.isEmpty {
+                self.userInfoLabel.stringValue = "@\(handle) · \(credits) cr"
+                self.userInfoLabel.textColor = NSColor(white: 0.55, alpha: 1)
+            }
+        }
     }
 
     deinit {
@@ -2088,11 +1976,13 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
         // Connection dot: Water teal when live, dim when not
         let kWaterTealDot = NSColor(red: 0.102, green: 0.565, blue: 0.627, alpha: 1) // #1A90A0
         syncDot.layer?.backgroundColor = (connected ? kWaterTealDot : NSColor(white: 0.22, alpha: 1)).cgColor
+        syncDot.toolTip = connected ? "Connected to Morph plugin" : "Open Morph plugin in your DAW to connect"
 
         // Mode label — short status only
         let kWaterTeal = NSColor(red: 0.102, green: 0.565, blue: 0.627, alpha: 1)
         syncModeLabel.stringValue = connected ? "Connected" : "Not connected"
         syncModeLabel.textColor   = connected ? kWaterTeal : .init(white: 0.28, alpha: 1)
+        syncModeLabel.toolTip     = connected ? nil : "Load the Morph plugin on a track in Logic, Ableton or FL Studio to connect"
 
         // BPM — mauve when morphed, WHITE when connected, dim otherwise
         syncBpmLabel.stringValue = connected ? "\(Int(s.bpm)) BPM" : ""
@@ -2306,6 +2196,8 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
             _ce.apply(console,arguments);
           };
           try {
+            // Dismiss cookie consent — WKWebView handles cookies natively
+            localStorage.setItem('water-cookie-consent','accepted');
             var k='sb-hlqwvctfmxljjmosfcqq-auth-token';
             var v=JSON.stringify({
               access_token:'\(a)',token_type:'bearer',
@@ -2326,8 +2218,7 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
     // CSS injected at documentStart — hides desktop chrome before first paint.
     private func buildCompanionCSSScript() -> String {
         let css = """
-        /* Hide body until postLoad JS reveals it — prevents nav flash */
-        body { opacity: 0 !important; transition: opacity 0.12s ease !important; }
+        /* body opacity is managed by the native NSView overlay — no CSS needed here */
         #nav-bar { display: none !important; }
         html body [data-bottom-nav],
         html body [data-bottom-nav] * { display: none !important; visibility: hidden !important; height: 0 !important; overflow: hidden !important; pointer-events: none !important; }
@@ -2365,6 +2256,19 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
     private func buildAudioWorkletPatchScript() -> String {
         return """
         (function(){
+          // ── AudioContext suspend patch ─────────────────────────────────────────
+          // Root cause: WebKit auto-suspends AudioContext in non-activating NSPanel
+          // after ~3s with no direct WebView interaction. inactiveSchedulingPolicy
+          // blocks JS throttling but NOT AudioContext suspension — two separate
+          // WebKit mechanisms. Fix: override suspend() on the prototype so it is
+          // a no-op for ALL AudioContext instances (current and future).
+          if(!window.__wkAcSuspendPatched){
+            window.__wkAcSuspendPatched = true;
+            var _AC = window.AudioContext || window.webkitAudioContext;
+            if(_AC){ _AC.prototype.suspend = function(){ return Promise.resolve(); }; }
+          }
+
+          // ── AudioWorklet blob→data: patch ──────────────────────────────────────
           if(window.__wkAudioWorkletPatched) return;
           window.__wkAudioWorkletPatched = true;
           const _orig = AudioWorklet.prototype.addModule;
@@ -2393,21 +2297,33 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
             injectionTime: .atDocumentStart,
             forMainFrameOnly: true
         ))
-        uc.addUserScript(WKUserScript(
-            source: buildAuthJS(),
-            injectionTime: .atDocumentStart,
-            forMainFrameOnly: true
-        ))
+        // Only inject auth UserScript if we have a valid stored token
+        if !WMTokenStore.shared.accessToken.isEmpty {
+            uc.addUserScript(WKUserScript(
+                source: buildAuthJS(),
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true
+            ))
+        }
         uc.addUserScript(WKUserScript(
             source: buildCompanionCSSScript(),
             injectionTime: .atDocumentStart,
             forMainFrameOnly: true
         ))
 
-        // Build SSR cookie from the current tokens.
+        // Build SSR cookie from the current tokens — ONLY if we have a valid token.
+        // Empty token would overwrite the real session set by web auth.
         let access  = WMTokenStore.shared.accessToken
         let refresh = WMTokenStore.shared.refreshToken
         let exp     = Int(Date().timeIntervalSince1970) + 3600
+
+        // If no stored token, show native login screen
+        guard !access.isEmpty else {
+            DispatchQueue.main.async {
+                (self.view.window?.windowController as? WMWindowController)?.showLogin()
+            }
+            return
+        }
         var userId  = "", email = ""
         let parts   = access.split(separator: ".")
         if parts.count >= 2 {
@@ -2433,13 +2349,17 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
                      "created_at": "2024-01-01T00:00:00Z",
                      "updated_at": "2024-01-01T00:00:00Z"] as [String: Any]
         ]
-        let libraryURL = URL(string: "\(kBaseURL)/discover")!
+        let libraryURL = URL(string: "\(kBaseURL)/discover?companion=mac&t=\(Int(Date().timeIntervalSince1970))")!
         guard let sessionData = try? JSONSerialization.data(withJSONObject: sessionObj),
               let sessionStr  = String(data: sessionData, encoding: .utf8) else {
-            webView.load(URLRequest(url: libraryURL)); return
+            webView.load(URLRequest(url: libraryURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)); return
         }
+        // Derive the cookie domain from the single base-URL constant (SSOT).
+        // Was hardcoded "water.95ent.ai" → SSR auth cookie was dropped when
+        // serving water.grauxmusic.com (logged-out first paint).
+        let cookieDomain = URL(string: kBaseURL)?.host ?? "water.grauxmusic.com"
         let props: [HTTPCookiePropertyKey: Any] = [
-            .domain:  "water.95ent.ai",
+            .domain:  cookieDomain,
             .path:    "/",
             .name:    "sb-hlqwvctfmxljjmosfcqq-auth-token",
             .value:   sessionStr,
@@ -2447,7 +2367,7 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
             .expires: Date().addingTimeInterval(3600)
         ]
         guard let cookie = HTTPCookie(properties: props) else {
-            webView.load(URLRequest(url: libraryURL)); return
+            webView.load(URLRequest(url: libraryURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)); return
         }
         let store = webView.configuration.websiteDataStore.httpCookieStore
         store.setCookie(cookie) { [weak self] in
@@ -2456,57 +2376,103 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
             // before we fire the HTTP request (guards against a known timing race).
             store.getAllCookies { [weak self] _ in
                 DispatchQueue.main.async {
-                    self?.webView.load(URLRequest(url: libraryURL))
+                    self?.webView.load(URLRequest(url: libraryURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15))
                 }
             }
         }
+    }
+
+    /// Web → companion login handoff (watermorph://auth deeplink).
+    /// Stores the tokens exactly like the polling-auth path (WMTokenStore +
+    /// save() → JUCE settings + own token.json), then rebuilds the auth
+    /// UserScript + SSR cookie and reloads the WKWebView so the web session is
+    /// authenticated.
+    func applyAuth(accessToken: String, refreshToken: String) {
+        guard !accessToken.isEmpty else { return }
+        WMTokenStore.shared.accessToken  = accessToken
+        WMTokenStore.shared.refreshToken = refreshToken
+        WMTokenStore.shared.save()
+        loadWebUI()
     }
 
     // MARK: WKNavigationDelegate
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        webView.evaluateJavaScript(buildAuthJS(), completionHandler: nil)
         updateNavBar()
 
-        guard let url = webView.url, url.host == "water.95ent.ai" else {
+        guard let url = webView.url, let host = url.host else {
             injectCompanionUI(); return
         }
 
-        let unauthCheck = """
-        (function(){
-          var txt = document.body && document.body.innerText || '';
-          return txt.indexOf('Drop your tracks here') !== -1;
-        })();
-        """
-        webView.evaluateJavaScript(unauthCheck) { [weak self] result, _ in
-            guard let self else { return }
-            let isUnauth = result as? Bool ?? false
-            if isUnauth {
-                if !self.authRetryDone {
-                    // First time: reload with freshly injected token
-                    self.authRetryDone = true
-                    WMAPIClient.shared.refreshTokens { [weak self] ok in
-                        guard let self else { return }
-                        if ok {
-                            self.loadWebUI()
-                        } else {
-                            // Token unrefreshable — send user to login
-                            DispatchQueue.main.async {
-                                (self.view.window?.windowController as? WMWindowController)?.showLogin()
-                            }
-                        }
-                    }
-                } else {
-                    // Second time still unauth — token is dead, show login
-                    (self.view.window?.windowController as? WMWindowController)?.showLogin()
-                }
-            } else {
-                self.injectCompanionUI()
+        // Don't inject Water auth on external auth pages (Google, etc.)
+        let isWaterHost = host == "water.grauxmusic.com" || host == "water.95ent.ai" || host == "localhost"
+        if isWaterHost {
+            // CRITICAL: Only inject stored token if we actually have one.
+            // If empty, injecting would overwrite the session the user just created via web auth.
+            if !WMTokenStore.shared.accessToken.isEmpty {
+                webView.evaluateJavaScript(buildAuthJS(), completionHandler: nil)
             }
         }
-    }
 
-    private var authRetryDone = false
+        guard isWaterHost else {
+            // External page (Google OAuth) — don't inject companion UI
+            return
+        }
+
+        let path = url.path
+
+        // After OAuth callback — extract new tokens from localStorage, save, then go to discover
+        if path.hasPrefix("/api/auth/callback") {
+            // Extract the new Supabase tokens set by the callback into localStorage
+            let extractJS = """
+            (function(){
+                try {
+                    var key = 'sb-hlqwvctfmxljjmosfcqq-auth-token';
+                    var raw = localStorage.getItem(key);
+                    if (!raw) return JSON.stringify({});
+                    var obj = JSON.parse(raw);
+                    return JSON.stringify({
+                        access_token: obj.access_token || '',
+                        refresh_token: obj.refresh_token || ''
+                    });
+                } catch(e) { return JSON.stringify({}); }
+            })();
+            """
+            webView.evaluateJavaScript(extractJS) { [weak self] result, _ in
+                guard let self else { return }
+                if let json = result as? String,
+                   let data = json.data(using: .utf8),
+                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: String],
+                   let access = obj["access_token"], !access.isEmpty {
+                    WMTokenStore.shared.accessToken = access
+                    WMTokenStore.shared.refreshToken = obj["refresh_token"] ?? ""
+                    WMTokenStore.shared.save()
+                } else {
+                    // Fallback: refresh via API
+                    WMAPIClient.shared.refreshTokens { ok in
+                        if ok { WMTokenStore.shared.save() }
+                    }
+                }
+                let discoverURL = URL(string: "\(kBaseURL)/discover?companion=mac&t=\(Int(Date().timeIntervalSince1970))")!
+                DispatchQueue.main.async {
+                    self.webView.load(URLRequest(url: discoverURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15))
+                }
+            }
+            return
+        }
+
+        // Kill all sign-in/onboarding/library pages → always land on discover
+        // Only ban true homepage/onboarding — NOT /auth pages (user needs to sign in)
+        let bannedPaths: [String] = ["/", "", "/start", "/about", "/pricing"]
+        let isBanned = bannedPaths.contains(path)
+        if isBanned {
+            let discoverURL = URL(string: "\(kBaseURL)/discover?companion=mac&t=\(Int(Date().timeIntervalSince1970))")!
+            webView.load(URLRequest(url: discoverURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15))
+            return
+        }
+
+        injectCompanionUI()
+    }
 
     private func injectCompanionUI() {
         // Reveal the web content now that auth is confirmed — fade out the dark overlay.
@@ -2532,12 +2498,27 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
         .shrink-0[aria-hidden="true"] { display: none !important; }
         [data-pending-overlay] { display: none !important; }
 
-        /* ── COMPANION TOP NAV — hidden, native Swift nav takes over ── */
+        /* ── COMPANION TOP NAV — only hide z-50 class version, allow inline-style z-index ── */
         .fixed.inset-x-0.top-0.z-50 { display: none !important; }
+
+        /* ── FILTER ROW + SEARCH BAR — hidden (genre pills replace them) ── */
+        [data-filter-row] { display: none !important; }
+        /* Hide the web app search bar — CompanionTopNav handles search */
+        [data-main-scroll=""] > div > div:first-child > [class*="search"],
+        [data-main-scroll=""] [class*="Search"][class*="rounded"],
+        [class*="search-bar"],
+        form[role="search"] { display: none !important; }
+
+        /* ── ROW HOVER: full-width, no side padding ── */
+        tbody tr:hover { background-color: rgba(255,255,255,0.06) !important; margin: 0 !important; }
+        tbody tr { margin: 0 !important; }
+        table { width: 100% !important; }
+        thead, [class*="table-header"] { display: none !important; }
 
         /* ── GLOBAL BASE ─────────────────────────────────────── */
         html, body, #__next { background: #0d0d0d !important; }
-        [data-main-scroll=""] { padding: 0 !important; }
+        /* Offset content below CompanionTopNav (h-10 = 40px) */
+        [data-main-scroll=""] { padding-top: 84px !important; padding-left: 0 !important; padding-right: 0 !important; padding-bottom: 0 !important; }
 
         /* ── GREETING — centered, one muted line ─────────────── */
         [data-greeting] {
@@ -2579,10 +2560,10 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
         /* ── REVEAL body (after nav is killed) ───────────────── */
         body { opacity: 1 !important; }
 
-        /* ── HOVER: strong Splice-level feedback ─────────────── */
-        tbody tr:hover { background-color: rgba(255,255,255,0.30) !important; }
-        tbody tr:hover td button { opacity: 1 !important; transform: scale(1.10) !important; }
-        tbody tr:active { background-color: rgba(255,255,255,0.18) !important; }
+        /* ── HOVER: Water teal tint (same as web) ────────────── */
+        tbody tr:hover { background-color: rgba(26,144,160,0.08) !important; }
+        tbody tr:hover td button { opacity: 1 !important; }
+        tbody tr:active { background-color: rgba(26,144,160,0.13) !important; }
 
         /* ── ACTION BUTTONS — 44px hitbox ────────────────────── */
         tbody td button[title*="Download"],
@@ -2597,7 +2578,12 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
         [data-player-title] { font-size: 14px !important; font-weight: 600 !important; }
 
         /* ── WEB FEEDBACK BUTTON — hide in companion (native strip handles it) ── */
-        [data-feedback-button], button[aria-label="Send feedback"] { display: none !important; }
+        /* Hide Sentry error badges — never shown to users in companion */
+        [data-feedback-button],
+        button[aria-label="Send feedback"],
+        [class*="__sentry"],
+        [id*="sentry-feedback"],
+        button[class*="sentry"] { display: none !important; }
         """
         let js = """
         (function(){
@@ -2611,6 +2597,35 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
             document.head.appendChild(s);
           }
 
+          // ── Adjacent-track prefetch: once ────────────────────────────────
+          // When a row is hovered/played, pre-fetch the next 2 rows' audio
+          // so arrow-key switching feels instant (no network wait).
+          if(!window.__morphAdjPrefetch){
+            window.__morphAdjPrefetch=true;
+            var _prefetched=new Set();
+            var _prefetchRow=function(row){
+              if(!row) return;
+              var loopId=row.dataset&&row.dataset.loopId;
+              if(!loopId||_prefetched.has(loopId)) return;
+              _prefetched.add(loopId);
+              // Warm the first 64KB so HTMLAudio can start immediately
+              var url='/api/melody/demo/'+loopId;
+              try{
+                fetch(url,{headers:{Range:'bytes=0-65535'},credentials:'omit',keepalive:true,priority:'low'}).catch(function(){_prefetched.delete(loopId);});
+              }catch(e){_prefetched.delete(loopId);}
+            };
+            document.addEventListener('mouseover',function(e){
+              var el=e.target;
+              for(var i=0;i<10&&el;i++,el=el.parentElement){
+                if(el.tagName==='TR'){
+                  _prefetchRow(el.nextElementSibling);
+                  _prefetchRow(el.nextElementSibling&&el.nextElementSibling.nextElementSibling);
+                  break;
+                }
+              }
+            },{passive:true});
+          }
+
           // ── Fetch patch: once ─────────────────────────────────────────────
           if(!window.__morphFetchPatched){
             window.__morphFetchPatched=true;
@@ -2621,6 +2636,27 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
               if(m) notify(m[1]);
               return _fetch.apply(this,arguments);
             };
+          }
+
+          // ── AudioContext keepalive: once ────────────────────────────────
+          // WKWebView suspends AudioContext when document.hidden is true or
+          // the page loses visibility — causes audio to stop after ~3s.
+          // Fix: override visibility API + resume any suspended contexts.
+          if(!window.__morphAudioKeepalive){
+            window.__morphAudioKeepalive=true;
+            try{
+              Object.defineProperty(document,'hidden',{get:function(){return false;},configurable:true});
+              Object.defineProperty(document,'visibilityState',{get:function(){return 'visible';},configurable:true});
+            }catch(e){}
+            setInterval(function(){
+              try{
+                if(window.Howler&&window.Howler.ctx&&window.Howler.ctx.state!=='running')
+                  window.Howler.ctx.resume();
+                document.querySelectorAll('audio,video').forEach(function(m){
+                  if(m.paused===false&&m.readyState>=2){}
+                });
+              }catch(e){}
+            },1500);
           }
 
           // ── Audio watcher: once ──────────────────────────────────────────
@@ -2640,20 +2676,22 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
             patchAudio();
           }
 
-          // ── Toast dismiss: once ──────────────────────────────────────────
+          // ── Toast/error suppress: permanent ─────────────────────────────
+          // Companion shows no error toasts — suppress all error-level Sonner
+          // toasts and any toast containing "notified" or "418" permanently.
           if(!window.__morphToastWatcher){
             window.__morphToastWatcher=true;
             var dismissErrToasts=function(){
               document.querySelectorAll('[data-sonner-toast]').forEach(function(el){
-                if(el.textContent&&(el.textContent.indexOf('418')!==-1||el.textContent.indexOf('notified')!==-1)){
+                var t=el.textContent||'';
+                if(t.indexOf('418')!==-1||t.indexOf('notified')!==-1||el.getAttribute('data-type')==='error'){
                   var btn=el.querySelector('[data-close-button]')||el.querySelector('[aria-label*="lose"]');
                   if(btn) btn.click(); else el.remove();
                 }
               });
             };
-            setTimeout(dismissErrToasts,300);
-            setTimeout(dismissErrToasts,800);
-            setTimeout(dismissErrToasts,1500);
+            dismissErrToasts();
+            setInterval(dismissErrToasts, 1000);
           }
 
           // ── Interaction handlers: once ───────────────────────────────────
@@ -2860,42 +2898,10 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
         webView.evaluateJavaScript(js, completionHandler: nil)
     }
 
-    private func handleMultiDrag(_ event: NSEvent) {
-        let ids = Array(selectedIds)
-        guard !ids.isEmpty else { return }
-        let sync = WMSyncState.shared
+    // handleMultiDrag removed per CEO directive — multi-track drag-to-DAW was an
+    // ungated bulk catalog-export path. Selection now supports bulk-edit only.
 
-        var items: [NSDraggingItem] = []
-        for (i, id) in ids.enumerated() {
-            let track = trackMap[id] ?? WMTrack(id: id, name: id, key: "", tags: "", bpm: 0, duration: 0, demoHash: "")
-            prefetchIfNeeded(id)
-            let label = sync.isConnected && track.bpm > 0
-                ? WMMorphEngine.displayName(trackName: track.name, bpm: sync.bpm, key: sync.key)
-                : "\(track.name).mp3"
-            let semis    = sync.isConnected ? semitonesBetween(from: track.key, to: sync.key) : 0
-            let pbItem   = NSPasteboardItem()
-            if sync.isConnected && track.bpm > 0 {
-                pbItem.setDataProvider(WMMorphDragProvider(track: track, targetBPM: sync.bpm,
-                                                           semitoneDelta: semis, displayName: label),
-                                       forTypes: [.fileURL])
-            } else {
-                pbItem.setDataProvider(WMDragFileProvider(track), forTypes: [.fileURL])
-            }
-            let dragItem = NSDraggingItem(pasteboardWriter: pbItem)
-            let img: NSImage
-            if #available(macOS 11.0, *) { img = NSWorkspace.shared.icon(for: .audio) }
-            else { img = NSWorkspace.shared.icon(forFileType: "mp3") }
-            img.size = NSSize(width: 32, height: 32)
-            let offset = CGFloat(i) * 4
-            let pt = selDragBtn.convert(event.locationInWindow, from: nil)
-            dragItem.setDraggingFrame(NSRect(x: pt.x - 16 + offset, y: pt.y - 16 + offset, width: 32, height: 32),
-                                      contents: img)
-            items.append(dragItem)
-        }
-        selDragBtn.beginDraggingSession(with: items, event: event, source: selDragBtn)
-    }
-
-    // MARK: Track metadata (for drag)
+    // MARK: Track metadata (for prefetch / morph cache)
 
     private func fetchTrackMap() {
         WMAPIClient.shared.fetchAllTracks { [weak self] _, tracks in
@@ -2903,6 +2909,29 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
             self.trackMap = Dictionary(uniqueKeysWithValues: tracks.map { ($0.id, $0) })
             for t in tracks where FileManager.default.fileExists(atPath: t.cachedFile.path) {
                 self.cachedIds.insert(t.id)
+            }
+            // Pre-cache all audio files in background — drag never blocks waiting for a download
+            self.batchPrefetchAll(tracks)
+        }
+    }
+
+    /// Kick off background downloads for every uncached track. URLSession throttles
+    /// concurrent connections internally; we just enqueue them all.
+    private func batchPrefetchAll(_ tracks: [WMTrack]) {
+        let pending = tracks.filter {
+            !$0.demoHash.isEmpty
+            && !cachedIds.contains($0.id)
+            && !prefetchingIds.contains($0.id)
+        }
+        for track in pending {
+            prefetchingIds.insert(track.id)
+            WMAPIClient.shared.downloadForDrag(track) { [weak self] url in
+                guard let self else { return }
+                self.prefetchingIds.remove(track.id)
+                if url != nil {
+                    self.cachedIds.insert(track.id)
+                    self.preMorphIfNeeded(track.id)
+                }
             }
         }
     }
@@ -2933,81 +2962,30 @@ final class WMWebLibraryVC: NSViewController, WKNavigationDelegate, WKScriptMess
         let outURL  = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(outName)
         guard !FileManager.default.fileExists(atPath: outURL.path) else { return }
         morphingIds.insert(id)
+        let bpb = sync.beatsPerBar
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             _ = try? WMMorphEngine.render(input: track.cachedFile,
                                           sourceBPM: track.bpm,
                                           targetBPM: tgt,
                                           semitoneDelta: semis,
-                                          trackName: track.name)
+                                          trackName: track.name,
+                                          beatsPerBar: bpb)
             DispatchQueue.main.async { self?.morphingIds.remove(id) }
         }
     }
 
-    // MARK: Native drag to DAW
-
-    private func handleDrag(_ id: String, _ event: NSEvent) {
-        let track: WMTrack = trackMap[id] ??
-            WMTrack(id: id, name: id, key: "", tags: "", bpm: 0, duration: 0, demoHash: "")
-
-        // Always start drag — lazy providers download on demand if file not cached yet.
-        prefetchIfNeeded(id)
-
-        let sync = WMSyncState.shared
-        let canMorph = sync.isConnected
-            && track.bpm > 0
-            && FileManager.default.fileExists(atPath: track.cachedFile.path)
-
-        func startDragWith(fileURL: URL, named: String) {
-            let pbItem = NSPasteboardItem()
-            let provider = WMNamedDragProvider(source: fileURL, displayName: named)
-            pbItem.setDataProvider(provider, forTypes: [.fileURL])
-            let dragItem = NSDraggingItem(pasteboardWriter: pbItem)
-            let img: NSImage
-            if #available(macOS 11.0, *) { img = NSWorkspace.shared.icon(for: .audio) }
-            else { img = NSWorkspace.shared.icon(forFileType: "mp3") }
-            img.size = NSSize(width: 32, height: 32)
-            let pt = webView.convert(event.locationInWindow, from: nil)
-            dragItem.setDraggingFrame(NSRect(x: pt.x - 16, y: pt.y - 16, width: 32, height: 32),
-                                      contents: img)
-            webView.beginDraggingSession(with: [dragItem], event: event, source: webView)
-            webView.hoveredId = ""
-        }
-
-        if canMorph {
-            let tgtBPM = sync.bpm
-            let semis  = semitonesBetween(from: track.key, to: sync.key)
-            let label  = WMMorphEngine.displayName(trackName: track.name, bpm: tgtBPM, key: sync.key)
-
-            // Start drag immediately with a provider that morphs on demand
-            let pbItem = NSPasteboardItem()
-            let provider = WMMorphDragProvider(track: track, targetBPM: tgtBPM, semitoneDelta: semis, displayName: label)
-            pbItem.setDataProvider(provider, forTypes: [.fileURL])
-            let dragItem = NSDraggingItem(pasteboardWriter: pbItem)
-            let img: NSImage
-            if #available(macOS 11.0, *) { img = NSWorkspace.shared.icon(for: .audio) }
-            else { img = NSWorkspace.shared.icon(forFileType: "mp3") }
-            img.size = NSSize(width: 32, height: 32)
-            let pt = webView.convert(event.locationInWindow, from: nil)
-            dragItem.setDraggingFrame(NSRect(x: pt.x - 16, y: pt.y - 16, width: 32, height: 32),
-                                      contents: img)
-            webView.beginDraggingSession(with: [dragItem], event: event, source: webView)
-            webView.hoveredId = ""
-        } else {
-            // No sync or file not cached yet — lazy raw drag
-            let pbItem = NSPasteboardItem()
-            pbItem.setDataProvider(WMDragFileProvider(track), forTypes: [.fileURL])
-            let dragItem = NSDraggingItem(pasteboardWriter: pbItem)
-            let img: NSImage
-            if #available(macOS 11.0, *) { img = NSWorkspace.shared.icon(for: .audio) }
-            else { img = NSWorkspace.shared.icon(forFileType: "mp3") }
-            img.size = NSSize(width: 32, height: 32)
-            let pt = webView.convert(event.locationInWindow, from: nil)
-            dragItem.setDraggingFrame(NSRect(x: pt.x - 16, y: pt.y - 16, width: 32, height: 32),
-                                      contents: img)
-            webView.beginDraggingSession(with: [dragItem], event: event, source: webView)
-            webView.hoveredId = ""
-        }
-    }
+    // MARK: Native drag to DAW — REMOVED
+    //
+    // handleDrag() previously started an NSDraggingSession that delivered the raw
+    // (or locally morphed) audio file straight to the DAW with NO web gate:
+    // it never called can('copy') and never hit spendDownloadCredits. That made it
+    // an ungated catalog-export leak. Removed per CEO directive.
+    //
+    // Audio now reaches the DAW only through the gated Copy button:
+    //   web companion-bridge.tsx → can('copy') + spendDownloadCredits (requires
+    //   has_subscription) → window.webkit "morphCopy" → handleCopyModified() →
+    //   NSPasteboard. No native code writes audio to the pasteboard or a drag
+    //   session except via that web-gated message.
 }
 
 // MARK: - Window controller
@@ -3222,8 +3200,13 @@ private func handleClient(_ fd: Int32) {
                 let key      = (rawKey == "?" || rawKey.isEmpty) ? "" : rawKey
                 let mode     = parts.count > 2 ? parts[2] : "project"
                 let timeSecs = parts.count > 3 ? (Double(parts[3]) ?? 0.0) : 0.0
+                // Time signature (appended by newer plugins) — defaults to 4/4.
+                let tsNum    = parts.count > 4 ? (Int(parts[4]) ?? 4) : 4
+                let tsDen    = parts.count > 5 ? (Int(parts[5]) ?? 4) : 4
                 DispatchQueue.main.async {
-                    WMSyncState.shared.update(bpm: bpm, key: key, mode: mode, timeSecs: timeSecs)
+                    WMSyncState.shared.update(bpm: bpm, key: key, mode: mode,
+                                              timeSecs: timeSecs,
+                                              tsNum: tsNum, tsDen: tsDen)
                 }
             } else if line.hasPrefix("TRANSPORT ") {
                 let parts    = line.dropFirst(10).split(separator: " ").map(String.init)
@@ -3257,7 +3240,40 @@ final class WMAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func handleGetURL(_ event: NSAppleEventDescriptor, withReplyEvent: NSAppleEventDescriptor) {
-        // watermorph://launch — snap to full size, surface and focus
+        // Extract the deeplink URL string from the Apple Event direct object.
+        let urlString = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue
+        let url       = urlString.flatMap { URL(string: $0) }
+
+        // watermorph://auth?access_token=…&refresh_token=… — web → companion login handoff.
+        // Parse tokens, store them (same as the polling-auth path), reload the web library.
+        if url?.host == "auth" {
+            var access = "", refresh = ""
+            if let u = url,
+               let comps = URLComponents(url: u, resolvingAgainstBaseURL: false),
+               let items = comps.queryItems {
+                for item in items {
+                    switch item.name {
+                    case "access_token":  access  = item.value ?? ""
+                    case "refresh_token": refresh = item.value ?? ""
+                    default: break
+                    }
+                }
+            }
+            guard !access.isEmpty else { return }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let wc = self.wc else { return }
+                // If the login screen is up, swap to the library first so the
+                // WKWebView exists to receive the authenticated session.
+                if wc.webLibraryVC == nil { wc.showLibrary() }
+                wc.webLibraryVC?.applyAuth(accessToken: access, refreshToken: refresh)
+                wc.showWindow(nil)
+                wc.snapToScreen()
+                NSApp.activate(ignoringOtherApps: true)
+            }
+            return
+        }
+
+        // watermorph://launch (and any other host) — snap to full size, surface and focus
         DispatchQueue.main.async { [weak self] in
             self?.wc?.showWindow(nil)
             self?.wc?.snapToScreen()   // after show so frame sticks

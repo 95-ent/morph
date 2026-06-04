@@ -43,8 +43,18 @@ if [ -z "$TEAM_ID" ] || [ -z "$APPLE_ID" ] || [ -z "$APP_SPECIFIC_PASSWORD" ]; t
     exit 1
 fi
 
-SIGN_APP="Developer ID Application: Sébastien Graux ($TEAM_ID)"
-SIGN_INSTALLER="Developer ID Installer: Sébastien Graux ($TEAM_ID)"
+# Derive the exact identity common-name from the keychain (org or personal name
+# varies by who created the cert). Match strictly on the Team ID so we never
+# sign with the wrong identity. Falls back to the personal-name literal only if
+# no Team-ID-scoped Developer ID identity is found.
+SIGN_APP="$( { security find-identity -v -p codesigning \
+    | grep "Developer ID Application" | grep "($TEAM_ID)" \
+    | head -1 | sed -E 's/^[[:space:]]*[0-9]+\)[[:space:]]+[0-9A-F]+[[:space:]]+"(.*)"$/\1/'; } 2>/dev/null || true)"
+[ -n "$SIGN_APP" ] || SIGN_APP="Developer ID Application: Sébastien Graux ($TEAM_ID)"
+SIGN_INSTALLER="$( { security find-identity -v \
+    | grep "Developer ID Installer" | grep "($TEAM_ID)" \
+    | head -1 | sed -E 's/^[[:space:]]*[0-9]+\)[[:space:]]+[0-9A-F]+[[:space:]]+"(.*)"$/\1/'; } 2>/dev/null || true)"
+[ -n "$SIGN_INSTALLER" ] || SIGN_INSTALLER="Developer ID Installer: Sébastien Graux ($TEAM_ID)"
 
 # Version = single source of truth from CMakeLists.txt
 HERE="$(cd "$(dirname "$0")" && pwd)"

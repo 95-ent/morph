@@ -33,8 +33,9 @@ echo "==> Packaging as .app bundle..."
 rm -rf "$BUNDLE" 2>/dev/null || sudo rm -rf "$BUNDLE"
 mkdir -p "$BUNDLE/Contents/MacOS"
 mkdir -p "$BUNDLE/Contents/Resources"
-cp "$APP_NAME" "$BUNDLE/Contents/MacOS/"
-cp Info.plist  "$BUNDLE/Contents/"
+cp "$APP_NAME"     "$BUNDLE/Contents/MacOS/"
+cp Info.plist      "$BUNDLE/Contents/"
+cp WaterMorph.icns "$BUNDLE/Contents/Resources/"
 rm -f "$APP_NAME"
 
 # ── 3. Sign ───────────────────────────────────────────────────────────────────

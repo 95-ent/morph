@@ -7,11 +7,13 @@
     <key>CFBundleIdentifier</key>
     <string>ai.95ent.watermorph.helper</string>
     <key>CFBundleName</key>
-    <string>Morph</string>
+    <string>Water Morph</string>
+    <key>CFBundleIconFile</key>
+    <string>WaterMorph</string>
     <key>CFBundleVersion</key>
-    <string>1.0</string>
+    <string>1.0.6</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
+    <string>1.0.6</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <!-- No dock icon; menu bar item + floating panel are still allowed -->
