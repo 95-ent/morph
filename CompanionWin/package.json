@@ -10,7 +10,7 @@
   },
   "build": {
     "appId": "ai.95ent.watermorph.helper",
-    "productName": "Water",
+    "productName": "Water Morph",
     "publish": {
       "provider": "github",
       "owner": "95-ent",
